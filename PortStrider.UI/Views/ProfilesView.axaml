@@ -100,7 +100,7 @@
                 </Grid>
             </Border>
 
-            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled">
+            <ScrollViewer x:Name="SettingsScroll" Grid.Column="1" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Spacing="12">
                     <Border Classes="card" Padding="16">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
@@ -251,6 +251,41 @@
                             </Grid>
                             <TextBlock Text="Credentials are stored in the profile JSON in clear text — keep site profiles on the tester only."
                                        Classes="muted" FontSize="11" IsVisible="{Binding Enable8021X}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" Padding="16">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="AUTOTEST TARGETS" Classes="kicker"/>
+                                    <TextBlock Text="Edit ping, TCP and HTTP targets, then save the profile. An empty default Gateway target follows the adapter gateway."
+                                               Classes="muted" TextWrapping="Wrap" FontSize="11"/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="ADD TARGET" Command="{Binding AddTargetCommand}" Classes="primary"/>
+                            </Grid>
+                            <ItemsControl ItemsSource="{Binding Targets}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:TargetEditorViewModel">
+                                        <Border Classes="inset" Margin="0,0,0,8" Padding="12">
+                                            <StackPanel Spacing="8">
+                                                <Grid ColumnDefinitions="Auto,2*,150,Auto,Auto" ColumnSpacing="8">
+                                                    <CheckBox IsChecked="{Binding Enabled}" ToolTip.Tip="Include in AutoTest"/>
+                                                    <TextBox Grid.Column="1" Classes="field" Watermark="Target label" Text="{Binding Label}"/>
+                                                    <ComboBox Grid.Column="2" ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind}"/>
+                                                    <Button Grid.Column="3" Content="COPY" Command="{Binding $parent[ItemsControl].((vm:ProfilesViewModel)DataContext).DuplicateTargetCommand}" CommandParameter="{Binding}"/>
+                                                    <Button Grid.Column="4" Content="REMOVE" Command="{Binding $parent[ItemsControl].((vm:ProfilesViewModel)DataContext).RemoveTargetCommand}" CommandParameter="{Binding}"/>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,120" ColumnSpacing="8" IsVisible="{Binding !IsHttp}">
+                                                    <TextBox Classes="field" Watermark="Hostname or IP address" Text="{Binding Host}"/>
+                                                    <NumericUpDown Grid.Column="1" Minimum="1" Maximum="65535" Value="{Binding Port}" IsVisible="{Binding IsTcp}"/>
+                                                </Grid>
+                                                <TextBox Classes="field" Watermark="https://service.example/health" Text="{Binding Url}" IsVisible="{Binding IsHttp}"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </Border>
 

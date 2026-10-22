@@ -125,26 +125,7 @@ public sealed class SwitchDiscoveryService : IDiscoveryService
         && dest[0] == 0x01 && dest[1] == 0x00 && dest[2] == 0x0C
         && dest[3] == 0xCC && dest[4] == 0xCC && dest[5] == 0xCC;
 
-    private static ILiveDevice? FindDevice(string name)
-    {
-        foreach (var device in CaptureDeviceList.Instance)
-        {
-            if (device.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
-                || device.Name.Contains(name, StringComparison.OrdinalIgnoreCase)
-                || (device.Description?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false))
-            {
-                return device;
-            }
-
-            if (device is LibPcapLiveDevice live
-                && (live.Interface.FriendlyName?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false))
-            {
-                return device;
-            }
-        }
-
-        return CaptureDeviceList.Instance.FirstOrDefault();
-    }
+    private static ILiveDevice? FindDevice(string name) => CaptureDeviceResolver.Find(name);
 
     private static SwitchInfo TimeoutInfo(SwitchInfoBuilder builder) => new()
     {

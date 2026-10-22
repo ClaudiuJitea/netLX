@@ -54,7 +54,7 @@ public sealed class JsonProfileStore : IProfileStore
 
     public Task ExportAsync(TestProfile profile, string path, CancellationToken cancellationToken = default)
     {
-        File.WriteAllText(path, JsonSerializer.Serialize(profile with { ProxyPassword = null }, _json));
+        File.WriteAllText(path, JsonSerializer.Serialize(profile with { ProxyPassword = null, Password8021X = null }, _json));
         return Task.CompletedTask;
     }
 

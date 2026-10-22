@@ -59,17 +59,19 @@ public class G2ParityTests
     }
 
     [Fact]
-    public async Task Proxy_password_survives_local_serialization_but_is_omitted_from_export()
+    public async Task Passwords_survive_local_serialization_but_are_omitted_from_export()
     {
-        var profile = TestProfile.Default() with { ProxyUrl = "http://proxy.example:8080", ProxyUsername = "tech", ProxyPassword = "secret" };
+        var profile = TestProfile.Default() with { ProxyUrl = "http://proxy.example:8080", ProxyUsername = "tech", ProxyPassword = "secret", Password8021X = "eap-secret" };
         var restored = JsonSerializer.Deserialize<TestProfile>(JsonSerializer.Serialize(profile));
         Assert.Equal("secret", restored!.ProxyPassword);
+        Assert.Equal("eap-secret", restored.Password8021X);
         var path = Path.GetTempFileName();
         try
         {
             await new JsonProfileStore().ExportAsync(profile, path);
             var exported = JsonSerializer.Deserialize<TestProfile>(await File.ReadAllTextAsync(path));
             Assert.Null(exported!.ProxyPassword);
+            Assert.Null(exported.Password8021X);
             Assert.Equal("tech", exported.ProxyUsername);
         }
         finally { File.Delete(path); }

@@ -159,17 +159,7 @@ public sealed class PacketCaptureService : ICaptureService, IDisposable
         _vlanCounts.AddOrUpdate(vlan, _ => (1, data.Length), (_, v) => (v.frames + 1, v.bytes + data.Length));
     }
 
-    private static ILiveDevice? FindDevice(string name)
-    {
-        foreach (var device in CaptureDeviceList.Instance)
-        {
-            if (device.Name.Contains(name, StringComparison.OrdinalIgnoreCase)
-                || (device.Description?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false))
-                return device;
-        }
-
-        return null;
-    }
+    private static ILiveDevice? FindDevice(string name) => CaptureDeviceResolver.Find(name);
 
     private static Exception ToCaptureStartException(Exception exception, string captureDevice)
     {

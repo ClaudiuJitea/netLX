@@ -28,6 +28,15 @@ public sealed class AdapterInfo
     public string CaptureDevice => PcapName ?? Name;
     public override string ToString() => DisplayLabel;
 
+    public string? SourceFor(string destination)
+    {
+        if (Uri.TryCreate(destination, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https") destination = uri.Host;
+        if (System.Net.IPAddress.TryParse(destination, out var ip))
+            return ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                ? Ipv6 ?? Ipv6LinkLocal : Ipv4;
+        return Ipv4 ?? Ipv6 ?? Ipv6LinkLocal;
+    }
+
     public static string FormatSpeed(long bitsPerSecond)
     {
         if (bitsPerSecond <= 0) return "—";

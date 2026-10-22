@@ -77,6 +77,7 @@ internal static class ProcessUtil
 
             return await cmd.ExecuteBufferedAsync(cancellationToken);
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return null;

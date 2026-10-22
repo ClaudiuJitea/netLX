@@ -56,6 +56,8 @@ public partial class ProfilesViewModel : ViewModelBase
     [ObservableProperty] private int _pingCount = 3;
     [ObservableProperty] private string _dnsQueryName = "cloudflare.com";
 
+    public ObservableCollection<TargetEditorViewModel> Targets { get; } = new();
+
     public ObservableCollection<TestProfile> Profiles { get; } = new();
     public ObservableCollection<StopAfterOption> StopAfterOptions { get; } = new();
     public IReadOnlyList<AddressMode> AddressModes { get; } = Enum.GetValues<AddressMode>();
@@ -120,6 +122,8 @@ public partial class ProfilesViewModel : ViewModelBase
         ClientKeyPath8021X = value.ClientKeyPath8021X ?? "";
         PingCount = value.PingCount <= 0 ? 3 : value.PingCount;
         DnsQueryName = string.IsNullOrWhiteSpace(value.DnsQueryName) ? "cloudflare.com" : value.DnsQueryName;
+        Targets.Clear();
+        foreach (var target in value.Targets) Targets.Add(new TargetEditorViewModel(target));
         RebuildStopAfter(value);
         Status = $"Loaded {value.Name}";
     }
@@ -152,9 +156,15 @@ public partial class ProfilesViewModel : ViewModelBase
             Status = "Enter an HTTP(S) proxy URL; use the separate fields for credentials.";
             return;
         }
+        var targets = Targets.Select(t => t.ToTarget()).ToArray();
+        foreach (var target in targets)
+        {
+            if (TargetValidation.Error(target) is { } error) { Status = $"{target.Label}: {error}"; return; }
+        }
         var updated = Selected with
         {
             AdapterId = _session.SelectedAdapter?.Id,
+            Targets = targets,
             EnableIpv6 = EnableIpv6,
             EnablePoeAdvertised = EnablePoeAdvertised,
             AddressMode = AddressMode,
@@ -189,6 +199,34 @@ public partial class ProfilesViewModel : ViewModelBase
         Reload();
         Selected = _store.Get(updated.Id);
         Status = "Profile saved.";
+    }
+
+    [RelayCommand]
+    private void AddTarget()
+    {
+        Targets.Add(new TargetEditorViewModel(new TestTarget { Id = Guid.NewGuid().ToString("N"), Label = "New target", Kind = TargetKind.Ping, Host = "" }));
+        RefreshTargetChoices();
+    }
+
+    [RelayCommand]
+    private void RemoveTarget(TargetEditorViewModel? target)
+    {
+        if (target is not null) Targets.Remove(target);
+        RefreshTargetChoices();
+    }
+
+    [RelayCommand]
+    private void DuplicateTarget(TargetEditorViewModel? target)
+    {
+        if (target is null) return;
+        Targets.Add(new TargetEditorViewModel(new TestTarget { Id = Guid.NewGuid().ToString("N"), Label = target.Label + " copy", Kind = target.Kind,
+            Host = target.Host, Port = target.Port, Url = target.Url, Enabled = target.Enabled }));
+        RefreshTargetChoices();
+    }
+
+    private void RefreshTargetChoices()
+    {
+        if (Selected is not null) RebuildStopAfter(Selected with { StopAfterStepId = StopAfter?.Id ?? "", Targets = Targets.Select(t => t.ToTarget()).ToArray() });
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

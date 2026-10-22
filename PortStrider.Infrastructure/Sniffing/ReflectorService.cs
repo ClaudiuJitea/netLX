@@ -115,20 +115,7 @@ public sealed class ReflectorService : IReflectorService, IDisposable
         return Task.CompletedTask;
     }
 
-    private static ILiveDevice? FindDevice(string name)
-    {
-        foreach (var device in CaptureDeviceList.Instance)
-        {
-            if (device.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
-                || device.Name.Contains(name, StringComparison.OrdinalIgnoreCase)
-                || (device.Description?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false))
-                return device;
-            if (device is LibPcapLiveDevice live && (live.Interface.FriendlyName?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false))
-                return device;
-        }
-
-        return null;
-    }
+    private static ILiveDevice? FindDevice(string name) => CaptureDeviceResolver.Find(name);
 
     private void StopInternal()
     {

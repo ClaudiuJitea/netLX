@@ -1,7 +1,9 @@
 using System.Reflection;
 using Avalonia;
 using Avalonia.Headless;
+using Avalonia.Controls;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using PortStrider.Core.Enums;
 using PortStrider.Core.Models;
 using PortStrider.Infrastructure.Adapters;
@@ -17,8 +19,8 @@ using PortStrider.UI;
 using PortStrider.UI.ViewModels;
 using PortStrider.UI.Views;
 
-const int width = 1920;
-const int height = 1080;
+var width = args.Length > 1 ? int.Parse(args[1]) : 1920;
+var height = args.Length > 2 ? int.Parse(args[2]) : 1080;
 var outputDir = args.Length > 0
     ? Path.GetFullPath(args[0])
     : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "docs", "screenshots"));
@@ -54,6 +56,32 @@ Capture(window, vm, outputDir, AppSection.Profiles, "05-profiles.png", model =>
     model.Profiles.ProxyUsername = "technician";
     model.Profiles.ProxyPassword = "demo-password";
 });
+
+vm.SelectedNav = vm.NavItems.First(n => n.Section == AppSection.Tools);
+vm.Tools.DnsServer = "10.42.7.1";
+vm.Tools.DnsName = "service.example.com";
+vm.Tools.DnsType = DnsRecordType.AAAA;
+vm.Tools.DnsStatus = "NOERROR · TCP · 14 ms · 2 answers (demonstration data)";
+vm.Tools.DnsAnswers.Add(new DnsAnswer("service.example.com", "CNAME", 300, "edge.example.com"));
+vm.Tools.DnsAnswers.Add(new DnsAnswer("edge.example.com", "AAAA", 60, "2001:db8::42"));
+Render(window);
+window.GetVisualDescendants().OfType<ToolsView>().Single().GetVisualDescendants().OfType<TabControl>().Single().SelectedIndex = 1;
+Capture(window, vm, outputDir, AppSection.Tools, "06-dns.png", _ => { });
+
+vm.SelectedNav = vm.NavItems.First(n => n.Section == AppSection.Profiles);
+Render(window);
+var profileView = window.GetVisualDescendants().OfType<ProfilesView>().Single();
+// Exercise commands through their actual bindings without writing to the user's profile store.
+var copy = profileView.GetVisualDescendants().OfType<Button>().First(b => Equals(b.Content, "COPY"));
+var targetCount = vm.Profiles.Targets.Count;
+copy.Command!.Execute(copy.CommandParameter);
+if (vm.Profiles.Targets.Count != targetCount + 1) throw new InvalidOperationException("Target copy binding failed.");
+Render(window);
+var remove = profileView.GetVisualDescendants().OfType<Button>().Last(b => Equals(b.Content, "REMOVE"));
+remove.Command!.Execute(remove.CommandParameter);
+if (vm.Profiles.Targets.Count != targetCount) throw new InvalidOperationException("Target remove binding failed.");
+profileView.FindControl<ScrollViewer>("SettingsScroll")!.Offset = new Vector(0, 700);
+Capture(window, vm, outputDir, AppSection.Profiles, "07-targets.png", _ => { });
 
 Console.WriteLine($"Saved screenshots to {outputDir}");
 

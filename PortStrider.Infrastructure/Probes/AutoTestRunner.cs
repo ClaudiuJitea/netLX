@@ -84,7 +84,7 @@ public sealed class AutoTestRunner : IAutoTestService
             AdapterName = adapter.Name,
             ProfileName = profile.Name,
             Overall = overall ?? Overall(steps),
-            Ipv4 = effective.Ipv4 ?? dhcp?.OfferedIp ?? "",
+            Ipv4 = effective.Ipv4 ?? "",
             Ipv6 = effective.Ipv6 ?? "",
             Ipv6LinkLocal = effective.Ipv6LinkLocal ?? "",
             Gateway = effective.Gateway ?? dhcp?.Gateway ?? "",
@@ -104,11 +104,24 @@ public sealed class AutoTestRunner : IAutoTestService
             if (_ifconfig.RequiresChanges(profile))
             {
                 Report(StepConfig, "Interface configuration", TestStatus.Running, "Applying profile connect settings…");
-                var log = new Progress<string>(m => Report(StepConfig, "Interface configuration", TestStatus.Running, m));
+                var log = new InlineProgress(m => Report(StepConfig, "Interface configuration", TestStatus.Running, m));
                 cfg = await _ifconfig.ApplyAsync(adapter, profile, log, cancellationToken);
                 cfgResult = cfg.Result;
                 Report(StepConfig, "Interface configuration", cfg.Result.Status, cfg.Result.Summary);
-                effective = _adapters.Find(cfg.EffectiveInterface) ?? adapter;
+                if (cfg.Result.Status != TestStatus.Pass || (profile.VlanId is > 0 && !cfg.IsSubInterface))
+                {
+                    Report(StepConfig, "Interface configuration", TestStatus.Fail,
+                        cfg.Result.Summary + " · requested settings were not fully applied; test stopped");
+                    return Build();
+                }
+                var configured = _adapters.Find(cfg.EffectiveInterface);
+                if (configured is null)
+                {
+                    Report(StepConfig, "Interface configuration", TestStatus.Fail,
+                        $"Cannot read configured interface {cfg.EffectiveInterface}; test stopped.");
+                    return Build();
+                }
+                effective = configured;
             }
 
             // ── Physical link ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +172,10 @@ public sealed class AutoTestRunner : IAutoTestService
                 {
                     var error = await _ifconfig.ApplyAddressAsync(cfg, dhcp.OfferedIp, dhcp.Subnet, FirstAddress(dhcp.Gateway), cancellationToken);
                     if (error is not null)
-                        Report(StepDhcp, "DHCP", TestStatus.Warning, DescribeDhcp(dhcp) + $" · lease not applied: {error}");
+                    {
+                        Report(StepDhcp, "DHCP", TestStatus.Fail, DescribeDhcp(dhcp) + $" · lease not fully applied: {error}; test stopped");
+                        return Build();
+                    }
                     effective = _adapters.Find(cfg.EffectiveInterface) ?? effective;
                 }
             }
@@ -170,7 +186,7 @@ public sealed class AutoTestRunner : IAutoTestService
 
             effective = _adapters.Find(effective.Name) ?? effective;
             Report(StepAddressing, "Addressing", TestStatus.Running, "Reading IPv4 / IPv6…");
-            var ipv4 = effective.Ipv4 ?? (profile.AddressMode == AddressMode.Static ? profile.StaticIpv4 : null);
+            var ipv4 = effective.Ipv4;
             if (string.IsNullOrWhiteSpace(ipv4))
             {
                 var why = profile.AddressMode == AddressMode.Dhcp
@@ -213,6 +229,12 @@ public sealed class AutoTestRunner : IAutoTestService
                 if (StopAfter(StepVlan)) return Build();
             }
 
+            if (effective.Ipv4 is null && effective.Ipv6 is null && effective.Ipv6LinkLocal is null)
+            {
+                Report(StepAddressing, "Addressing", TestStatus.Fail, "Selected adapter has no configured IP address; routed probes were not sent.");
+                return Build();
+            }
+
             // ── IPv6 ──────────────────────────────────────────────────────────────────────────────────────
             if (profile.EnableIpv6)
             {
@@ -224,8 +246,8 @@ public sealed class AutoTestRunner : IAutoTestService
                 else
                 {
                     var v6 = await _probes.PingOnceAsync("2606:4700:4700::1111", 1500, effective.Ipv6, cancellationToken);
-                    Report(StepIpv6, "IPv6 connectivity", v6.Success ? TestStatus.Pass : TestStatus.Warning,
-                        v6.Success ? $"{addressing} · RTT {v6.RoundtripMs} ms" : $"{addressing} · {v6.Status}",
+                    Report(StepIpv6, "IPv6 connectivity", v6.Success && v6.SourceBound ? TestStatus.Pass : TestStatus.Warning,
+                        v6.Success ? $"{addressing} · RTT {v6.RoundtripMs} ms · {v6.Status}" : $"{addressing} · {v6.Status}",
                         "2606:4700:4700::1111");
                 }
             }
@@ -239,7 +261,7 @@ public sealed class AutoTestRunner : IAutoTestService
             }
             else
             {
-                var series = await PingSeriesAsync(gateway, pingCount, effective.Ipv4, cancellationToken);
+                var series = await PingSeriesAsync(gateway, pingCount, effective.SourceFor(gateway), cancellationToken);
                 Report(StepGateway, "Default gateway", series.Status, $"{gateway} · {series.Details}", gateway);
             }
 
@@ -247,7 +269,7 @@ public sealed class AutoTestRunner : IAutoTestService
 
             // ── DNS (each server, N queries) ──────────────────────────────────────────────────────────────
             Report(StepDns, "DNS servers", TestStatus.Running, $"Querying {profile.DnsQueryName}…");
-            dns = await DnsTestAsync(DnsServers(effective, dhcp, profile), profile.DnsQueryName, pingCount, effective.Ipv4, cancellationToken);
+            dns = await DnsTestAsync(DnsServers(effective, dhcp, profile), profile.DnsQueryName, pingCount, effective, cancellationToken);
             Report(StepDns, "DNS servers", dns.Status, dns.Summary);
             if (StopAfter(StepDns)) return Build();
 
@@ -267,12 +289,21 @@ public sealed class AutoTestRunner : IAutoTestService
                     _ => target.Url
                 });
 
+                var targetDestination = target.Kind == TargetKind.Http ? target.Url : host;
+                if (effective.SourceFor(targetDestination) is null)
+                {
+                    var detail = "Selected adapter has no source address for this target's address family.";
+                    Report(id, target.Label, TestStatus.Fail, detail);
+                    targets.Add(new TargetTestResult { TargetId = target.Id, Label = target.Label, Status = TestStatus.Fail, Details = detail });
+                    if (StopAfter(id) || StopAfter(target.Id)) return Build();
+                    continue;
+                }
                 var sw = Stopwatch.StartNew();
                 switch (target.Kind)
                 {
                     case TargetKind.Ping:
                     {
-                        var series = await PingSeriesAsync(host, pingCount, effective.Ipv4, cancellationToken);
+                        var series = await PingSeriesAsync(host, pingCount, effective.SourceFor(host), cancellationToken);
                         sw.Stop();
                         var details = $"{host} · {series.Details}";
                         Report(id, target.Label, series.Status, details, host);
@@ -285,7 +316,7 @@ public sealed class AutoTestRunner : IAutoTestService
                         var opens = 0;
                         for (var i = 0; i < pingCount; i++)
                         {
-                            var port = await _probes.ProbePortAsync(host, target.Port, 1200, effective.Ipv4, cancellationToken);
+                            var port = await _probes.ProbePortAsync(host, target.Port, 1200, effective.SourceFor(host), cancellationToken);
                             if (port.Open) opens++;
                             times.Add(port.Open ? $"{port.ElapsedMs}" : "×");
                         }
@@ -300,7 +331,7 @@ public sealed class AutoTestRunner : IAutoTestService
                     case TargetKind.Http:
                     {
                         var url = string.IsNullOrWhiteSpace(target.Url) ? $"https://{host}" : target.Url;
-                        var http = await _probes.ProbeHttpAsync(url, profile.ProxyUrl, cancellationToken, profile.ProxyUsername, profile.ProxyPassword);
+                        var http = await _probes.ProbeHttpAsync(url, profile.ProxyUrl, cancellationToken, profile.ProxyUsername, profile.ProxyPassword, effective.SourceFor(url));
                         sw.Stop();
                         var status = http.Success ? TestStatus.Pass : TestStatus.Fail;
                         var details = http.Error ?? $"HTTP {http.StatusCode} in {http.ElapsedMs} ms"
@@ -323,7 +354,7 @@ public sealed class AutoTestRunner : IAutoTestService
                 try { await dot1xSession.StopAsync(); } catch { /* ignore */ }
             }
 
-            if (cfg is not null && cfg.HasChanges)
+            if (cfg is not null)
             {
                 try { await cfg.RestoreAsync(CancellationToken.None); } catch { /* best effort */ }
             }
@@ -392,16 +423,23 @@ public sealed class AutoTestRunner : IAutoTestService
     }
 
     private sealed record Series(TestStatus Status, string Details);
+    private sealed class InlineProgress(Action<string> report) : IProgress<string>
+    {
+        public void Report(string value) => report(value);
+    }
 
     private async Task<Series> PingSeriesAsync(string host, int count, string? source, CancellationToken cancellationToken)
     {
+        if (source is null) return new Series(TestStatus.Fail, "Selected adapter has no compatible source address.");
         var rtts = new List<string>();
         var ok = 0;
+        var sourceVerified = true;
         string? lastError = null;
         for (var i = 0; i < count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sample = await _probes.PingOnceAsync(host, 1200, source, cancellationToken);
+            if (!string.IsNullOrEmpty(source) && !sample.SourceBound) sourceVerified = false;
             if (sample.Success)
             {
                 ok++;
@@ -416,13 +454,14 @@ public sealed class AutoTestRunner : IAutoTestService
             if (i < count - 1) await Task.Delay(150, cancellationToken);
         }
 
-        var status = ok == count ? TestStatus.Pass : ok > 0 ? TestStatus.Warning : TestStatus.Fail;
+        var status = ok == count && sourceVerified ? TestStatus.Pass : ok > 0 ? TestStatus.Warning : TestStatus.Fail;
         var details = $"{ok}/{count} replies · {string.Join(" / ", rtts)} ms";
+        if (!sourceVerified) details += " · OS routing; selected source not enforced";
         if (ok == 0 && lastError is not null) details += $" ({Short(lastError)})";
         return new Series(status, details);
     }
 
-    private async Task<DnsTestResult> DnsTestAsync(IReadOnlyList<string> servers, string name, int count, string? source, CancellationToken cancellationToken)
+    private async Task<DnsTestResult> DnsTestAsync(IReadOnlyList<string> servers, string name, int count, AdapterInfo adapter, CancellationToken cancellationToken)
     {
         if (servers.Count == 0)
         {
@@ -439,6 +478,7 @@ public sealed class AutoTestRunner : IAutoTestService
                     Summary = $"No DNS servers on adapter · OS resolver answered {addrs.FirstOrDefault()} in {sw.ElapsedMilliseconds} ms"
                 };
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 return new DnsTestResult { Status = TestStatus.Fail, QueryName = name, Summary = $"No DNS servers and OS resolver failed: {Short(ex.Message)}" };
@@ -449,11 +489,23 @@ public sealed class AutoTestRunner : IAutoTestService
         foreach (var server in servers.Take(4))
         {
             var rtts = new List<long?>();
+            var pingRtts = new List<long?>();
+            var source = adapter.SourceFor(server);
+            if (source is null)
+            {
+                results.Add(new DnsServerResult { Server = server, RoundtripsMs = Enumerable.Repeat<long?>(null, count).ToArray(), Error = "Selected adapter has no compatible source address" });
+                continue;
+            }
             string? resolved = null, error = null;
             for (var i = 0; i < count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var sample = await _probes.QueryDnsAsync(server, name, 1500, source, cancellationToken);
+                var query = _probes.QueryDnsAsync(server, name, 1500, source, cancellationToken);
+                var ping = _probes.PingOnceAsync(server, 1200, source, cancellationToken);
+                await Task.WhenAll(query, ping);
+                var sample = await query;
+                var echo = await ping;
+                pingRtts.Add(echo.Success ? echo.RoundtripMs : null);
                 if (sample.Success)
                 {
                     rtts.Add(sample.RoundtripMs);
@@ -466,14 +518,14 @@ public sealed class AutoTestRunner : IAutoTestService
                 }
             }
 
-            results.Add(new DnsServerResult { Server = server, RoundtripsMs = rtts, ResolvedAddress = resolved, Error = error });
+            results.Add(new DnsServerResult { Server = server, RoundtripsMs = rtts, PingRoundtripsMs = pingRtts, ResolvedAddress = resolved, Error = error });
         }
 
         var good = results.Count(r => r.RoundtripsMs.All(x => x.HasValue));
         var any = results.Count(r => r.Success);
         var status = good == results.Count ? TestStatus.Pass : any > 0 ? TestStatus.Warning : TestStatus.Fail;
         var summary = string.Join(" · ", results.Select(r =>
-            $"{r.Server}: {string.Join("/", r.RoundtripsMs.Select(x => x.HasValue ? x.Value.ToString() : "×"))} ms"
+            $"{r.Server}: DNS {string.Join("/", r.RoundtripsMs.Select(x => x.HasValue ? x.Value.ToString() : "×"))} ms; ICMP {string.Join("/", r.PingRoundtripsMs.Select(x => x.HasValue ? x.Value.ToString() : "×"))} ms"
             + (r.Success ? "" : $" ({Short(r.Error ?? "no answer")})")));
         var answer = results.FirstOrDefault(r => r.ResolvedAddress is not null)?.ResolvedAddress;
         if (answer is not null) summary = $"{name} → {answer} · " + summary;

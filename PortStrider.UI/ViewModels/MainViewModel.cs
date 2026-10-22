@@ -112,6 +112,7 @@ public partial class MainViewModel : ViewModelBase
 
     partial void OnSelectedNavChanged(NavItem value)
     {
+        if (CurrentPage == Tools && value.Section != AppSection.Tools) Tools.StopTests();
         CurrentPage = value.Section switch
         {
             AppSection.AutoTest => AutoTest,

@@ -33,6 +33,7 @@ public sealed class DnsServerResult
 {
     public required string Server { get; init; }
     public IReadOnlyList<long?> RoundtripsMs { get; init; } = [];
+    public IReadOnlyList<long?> PingRoundtripsMs { get; init; } = [];
     public bool Success => RoundtripsMs.Any(r => r.HasValue);
     public string? ResolvedAddress { get; init; }
     public string? Error { get; init; }
@@ -127,6 +128,7 @@ public sealed class LinkTelemetry
 
 public sealed class VlanObservation
 {
+    public string Label => VlanId switch { -1 => "Untagged", -2 => "Other VLANs", 0 => "0 (priority tag)", _ => VlanId.ToString() };
     public int VlanId { get; init; }
     public long Frames { get; init; }
     public long Bytes { get; init; }

@@ -366,6 +366,8 @@ public partial class AutoTestViewModel : ViewModelBase
         StopContinuous();
         var host = step.ContinuousHost!;
         var port = step.ContinuousPort;
+        var source = _session.SelectedAdapter?.SourceFor(host);
+        if (source is null) { ContinuousStats = "Selected adapter has no compatible source address."; return; }
         _continuousCts = new CancellationTokenSource();
         var token = _continuousCts.Token;
         IsContinuous = true;
@@ -379,11 +381,11 @@ public partial class AutoTestViewModel : ViewModelBase
                 PingSample sample;
                 if (port is null)
                 {
-                    sample = await _probes.PingOnceAsync(host, 1000, null, token);
+                    sample = await _probes.PingOnceAsync(host, 1000, source, token);
                 }
                 else
                 {
-                    var probe = await _probes.ProbePortAsync(host, port.Value, 1000, null, token);
+                    var probe = await _probes.ProbePortAsync(host, port.Value, 1000, source, token);
                     sample = new PingSample { Sequence = 0, Success = probe.Open, RoundtripMs = probe.ElapsedMs, Status = probe.Open ? "open" : probe.Error ?? "closed" };
                 }
 

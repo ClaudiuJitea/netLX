@@ -56,7 +56,7 @@
 
     <Grid RowDefinitions="Auto,*" RowSpacing="12">
         <Border Classes="toolHero">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="13">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="13">
                 <Border Width="38" Height="38" CornerRadius="9" Background="{StaticResource AccentDimBrush}">
                     <materialIcons:MaterialIcon Kind="Tools" Width="20" Height="20"
                                                 Foreground="{StaticResource AccentBrush}"
@@ -67,6 +67,7 @@
                     <TextBlock Text="Run focused connectivity, path, service, web and throughput diagnostics."
                                Classes="muted" FontSize="12"/>
                 </StackPanel>
+                <Button Grid.Column="3" Content="STOP TESTS" Classes="danger" Command="{Binding StopTestsCommand}"/>
                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Spacing="2">
                     <TextBlock Text="ACTIVE INTERFACE" Classes="kicker" TextAlignment="Right"/>
                     <TextBlock Text="{Binding Session.SelectedAdapter.Name, FallbackValue='None selected'}"
@@ -113,11 +114,33 @@
             </Grid>
         </TabItem>
 
+        <TabItem Header="DNS">
+            <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12" Margin="0,10,0,0">
+                <Border Classes="toolInput">
+                    <Grid ColumnDefinitions="*,2*,130,Auto" ColumnSpacing="10">
+                        <StackPanel Spacing="5"><TextBlock Text="DNS SERVER IP" Classes="kicker"/><TextBox Classes="field" Text="{Binding DnsServer}"/></StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="5"><TextBlock Text="QUERY NAME" Classes="kicker"/><TextBox Classes="field" Text="{Binding DnsName}"/></StackPanel>
+                        <StackPanel Grid.Column="2" Spacing="5"><TextBlock Text="RECORD TYPE" Classes="kicker"/><ComboBox ItemsSource="{Binding DnsTypes}" SelectedItem="{Binding DnsType}"/></StackPanel>
+                        <Button Grid.Column="3" Content="LOOKUP" Classes="primary" Command="{Binding LookupDnsCommand}" IsEnabled="{Binding !IsDns}" VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Border>
+                <TextBlock Grid.Row="1" Text="{Binding DnsStatus}" TextWrapping="Wrap" FontFamily="{StaticResource Mono}" Foreground="{StaticResource AccentBrush}"/>
+                <DataGrid Grid.Row="2" Classes="toolGrid" ItemsSource="{Binding DnsAnswers}" IsReadOnly="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="NAME" Binding="{Binding Name}" Width="2*"/>
+                        <DataGridTextColumn Header="TYPE" Binding="{Binding Type}" Width="90"/>
+                        <DataGridTextColumn Header="TTL (s)" Binding="{Binding Ttl}" Width="90"/>
+                        <DataGridTextColumn Header="ANSWER" Binding="{Binding Value}" Width="3*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </TabItem>
+
         <TabItem Header="Trace">
             <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12" Margin="0,10,0,0">
                 <StackPanel Spacing="3">
                     <TextBlock Text="PATH DISCOVERY" Classes="kicker"/>
-                    <TextBlock Text="Map each routed hop between this interface and the destination." Classes="muted" FontSize="12"/>
+                    <TextBlock Text="Map routed hops to the destination using the operating system routing table." Classes="muted" FontSize="12"/>
                 </StackPanel>
                 <Border Grid.Row="1" Classes="toolInput">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
@@ -148,7 +171,7 @@
             <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12" Margin="0,10,0,0">
                 <StackPanel Spacing="3">
                     <TextBlock Text="TCP SERVICE PROBE" Classes="kicker"/>
-                    <TextBlock Text="Verify selected TCP services on a host. Closed ports may be expected on a hardened network."
+                    <TextBlock Text="Probe up to 64 distinct TCP ports, with eight concurrent connections. Closed ports may be expected."
                                Classes="muted" FontSize="12" TextWrapping="Wrap"/>
                 </StackPanel>
                 <Border Grid.Row="1" Classes="toolInput">
@@ -217,6 +240,9 @@
                             <TextBlock Text="{Binding HttpResult.CertificateSubject}" TextWrapping="Wrap"/>
                             <TextBlock Text="ISSUER" Classes="kicker" Margin="0,5,0,0"/>
                             <TextBlock Text="{Binding HttpResult.CertificateIssuer}" Classes="muted" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding HttpResult.FinalUrl}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding HttpResult.SourceAddress, StringFormat='Source: {0}'}"/>
+                            <TextBlock Text="{Binding HttpResult.CertificateError}" TextWrapping="Wrap"/>
                             <TextBlock Text="{Binding HttpResult.Error}" Foreground="{StaticResource ErrBrush}" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Grid>
@@ -228,7 +254,7 @@
             <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12" Margin="0,10,0,0">
                 <StackPanel Spacing="3">
                     <TextBlock Text="THROUGHPUT TEST" Classes="kicker"/>
-                    <TextBlock Text="Measure bandwidth against an iPerf3 endpoint, or run this tester as the far-end server."
+                    <TextBlock Text="Measure bandwidth against an iPerf3 endpoint, or run this tester as the far-end server. Uses OS routing; the server listens on all interfaces."
                                Classes="muted" FontSize="12" TextWrapping="Wrap"/>
                 </StackPanel>
                 <Border Grid.Row="1" Classes="toolInput">

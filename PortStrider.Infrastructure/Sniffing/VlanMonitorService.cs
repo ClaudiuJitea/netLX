@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Diagnostics;
 using PortStrider.Core.Models;
 using PortStrider.Core.Services;
 using SharpPcap;
@@ -10,7 +10,8 @@ public sealed class VlanMonitorService : IVlanMonitorService, IDisposable
     private ILiveDevice? _device;
     private IDisposable? _lease;
     private PacketArrivalEventHandler? _handler;
-    private readonly ConcurrentDictionary<int, (long frames, long bytes)> _counts = new();
+    private readonly VlanTrafficCounter _counts = new();
+    private long _lastUpdate;
 
     public bool IsRunning { get; private set; }
     public IReadOnlyList<VlanObservation> Current => BuildSnapshot();
@@ -20,6 +21,7 @@ public sealed class VlanMonitorService : IVlanMonitorService, IDisposable
     {
         StopInternal();
         _counts.Clear();
+        _lastUpdate = 0;
         var device = FindDevice(captureDevice)
             ?? throw new InvalidOperationException($"Capture device '{captureDevice}' not found.");
         _lease = CaptureDeviceLease.Acquire(device.Name);
@@ -30,10 +32,13 @@ public sealed class VlanMonitorService : IVlanMonitorService, IDisposable
             _handler = (_, e) =>
             {
                 var raw = e.GetPacket().Data;
-                var vlan = ExtractVlan(raw);
-                if (vlan is null) return;
-                _counts.AddOrUpdate(vlan.Value, _ => (1, raw.Length), (_, v) => (v.frames + 1, v.bytes + raw.Length));
-                Updated?.Invoke(this, BuildSnapshot());
+                _counts.Add(raw);
+                var now = Stopwatch.GetTimestamp();
+                if (now - Interlocked.Read(ref _lastUpdate) >= Stopwatch.Frequency / 4)
+                {
+                    Interlocked.Exchange(ref _lastUpdate, now);
+                    Updated?.Invoke(this, BuildSnapshot());
+                }
             };
             device.OnPacketArrival += _handler;
             device.StartCapture();
@@ -54,45 +59,13 @@ public sealed class VlanMonitorService : IVlanMonitorService, IDisposable
     public Task StopAsync()
     {
         StopInternal();
+        Updated?.Invoke(this, BuildSnapshot());
         return Task.CompletedTask;
     }
 
-    private IReadOnlyList<VlanObservation> BuildSnapshot()
-    {
-        var total = _counts.Values.Sum(v => v.frames);
-        return _counts
-            .OrderByDescending(kv => kv.Value.frames)
-            .Take(9)
-            .Select(kv => new VlanObservation
-            {
-                VlanId = kv.Key,
-                Frames = kv.Value.frames,
-                Bytes = kv.Value.bytes,
-                SharePercent = total == 0 ? 0 : kv.Value.frames * 100d / total
-            })
-            .ToArray();
-    }
+    private IReadOnlyList<VlanObservation> BuildSnapshot() => _counts.Snapshot();
 
-    private static int? ExtractVlan(byte[] data)
-    {
-        if (data.Length < 16) return null;
-        var ethertype = (data[12] << 8) | data[13];
-        if (ethertype is 0x8100 or 0x88A8 && data.Length >= 18)
-            return (data[14] & 0x0F) << 8 | data[15];
-        return null;
-    }
-
-    private static ILiveDevice? FindDevice(string name)
-    {
-        foreach (var device in CaptureDeviceList.Instance)
-        {
-            if (device.Name.Contains(name, StringComparison.OrdinalIgnoreCase)
-                || (device.Description?.Contains(name, StringComparison.OrdinalIgnoreCase) ?? false))
-                return device;
-        }
-
-        return CaptureDeviceList.Instance.FirstOrDefault();
-    }
+    private static ILiveDevice? FindDevice(string name) => CaptureDeviceResolver.Find(name);
 
     private void StopInternal()
     {

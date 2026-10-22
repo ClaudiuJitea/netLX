@@ -26,7 +26,7 @@ public sealed class CapabilityService : ICapabilityService
             Feature("link-adv", "Advertised vs actual speed / MDI-X", OperatingSystem.IsLinux() && HasTool("ethtool") ? CapabilityLevel.Supported : CapabilityLevel.Degraded,
                 OperatingSystem.IsLinux() ? "Parsed from ethtool link settings; flags downshift." : "NDIS reports actual speed only."),
             Feature("link-force", "Forced speed / duplex", OperatingSystem.IsLinux() && HasTool("ethtool") ? CapabilityLevel.Supported : CapabilityLevel.Unavailable,
-                OperatingSystem.IsLinux() ? "ethtool -s during AutoTest, auto-negotiation restored afterwards." : "Not exposed through Windows NDIS."),
+                OperatingSystem.IsLinux() ? "ethtool -s during AutoTest, original link mode restored afterwards." : "Not implemented on Windows."),
             Feature("mac", "User-defined MAC / static IP", OperatingSystem.IsLinux() && HasTool("ip") ? CapabilityLevel.Supported : CapabilityLevel.Unavailable,
                 OperatingSystem.IsLinux() ? "iproute2 during AutoTest, restored afterwards." : "Requires iproute2 (Linux)."),
             Feature("vlan", "VLAN tagging (ID + priority)", OperatingSystem.IsLinux() && HasTool("ip") ? CapabilityLevel.Supported : CapabilityLevel.Unavailable,
@@ -49,7 +49,11 @@ public sealed class CapabilityService : ICapabilityService
                 "Requires dedicated tone hardware.", "Use an external tone probe."),
             Feature("sfp", "SFP diagnostics", OperatingSystem.IsLinux() ? CapabilityLevel.Degraded : CapabilityLevel.Unavailable,
                 OperatingSystem.IsLinux() ? "Uses ethtool module EEPROM/DDM when exposed." : "Not exposed through Windows NDIS."),
-            Feature("iperf", "Throughput (iperf3)", CapabilityLevel.Supported, "External iperf3 client/server."),
+            Feature("dns", "DNS lookup", CapabilityLevel.Supported, "Direct server queries: A, AAAA, CNAME, NS, MX, TXT, PTR; TTLs and TCP fallback."),
+            Feature("source", "Selected-source probes", OperatingSystem.IsLinux() ? CapabilityLevel.Supported : CapabilityLevel.Degraded,
+                "TCP, HTTP and DNS bind the source address; Linux ICMP needs iputils-ping. Hostname lookup, traceroute and iPerf use OS routing."),
+            Feature("iperf", "Throughput (iperf3)", HasTool("iperf3") ? CapabilityLevel.Supported : CapabilityLevel.Unavailable,
+                "External iperf3 TCP client/server; OS routing.", HasTool("iperf3") ? null : "Install iperf3."),
             Feature("reports", "Local reports & bundles", CapabilityLevel.Supported, "JSON, CSV, PDF, PCAP, ZIP bundles.")
         };
 

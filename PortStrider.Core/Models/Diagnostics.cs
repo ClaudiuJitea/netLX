@@ -45,6 +45,7 @@ public sealed record PingSample
     public required int Sequence { get; init; }
     public required bool Success { get; init; }
     public long RoundtripMs { get; init; }
+    public bool SourceBound { get; init; }
     public string Status { get; init; } = "";
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.Now;
 }
@@ -80,6 +81,9 @@ public sealed class PortProbeResult
 
 public sealed class HttpProbeResult
 {
+    public string? FinalUrl { get; init; }
+    public string? SourceAddress { get; init; }
+    public string? CertificateError { get; init; }
     public required string Url { get; init; }
     public int StatusCode { get; init; }
     public long ElapsedMs { get; init; }

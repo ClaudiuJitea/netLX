@@ -13,6 +13,14 @@ public partial class ToolsViewModel : ViewModelBase
     private readonly AppSession _session;
     private CancellationTokenSource? _pingCts;
     private int _seq;
+    private CancellationTokenSource _operations = new();
+    [ObservableProperty] private string _dnsServer = "1.1.1.1";
+    [ObservableProperty] private string _dnsName = "example.com";
+    [ObservableProperty] private DnsRecordType _dnsType = DnsRecordType.A;
+    [ObservableProperty] private bool _isDns;
+    [ObservableProperty] private string _dnsStatus = "Query a DNS server directly; TTLs are in seconds.";
+    public IReadOnlyList<DnsRecordType> DnsTypes { get; } = Enum.GetValues<DnsRecordType>();
+    public ObservableCollection<DnsAnswer> DnsAnswers { get; } = new();
 
     [ObservableProperty] private string _pingHost = "1.1.1.1";
     [ObservableProperty] private bool _isPinging;
@@ -51,22 +59,25 @@ public partial class ToolsViewModel : ViewModelBase
         _session = session;
         _session.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(AppSession.SelectedAdapter) && _session.SelectedAdapter is { } a)
+            if (e.PropertyName == nameof(AppSession.SelectedAdapter))
             {
-                if (string.IsNullOrEmpty(PortHost)) PortHost = a.Gateway ?? a.Ipv4 ?? "";
-                if (string.IsNullOrEmpty(IperfHost)) IperfHost = a.Gateway ?? "";
+                StopTests();
+                if (_session.SelectedAdapter is { } a)
+                {
+                    DnsServer = a.DnsServers.FirstOrDefault() ?? "1.1.1.1";
+                    if (string.IsNullOrEmpty(PortHost)) PortHost = a.Gateway ?? a.Ipv4 ?? "";
+                    if (string.IsNullOrEmpty(IperfHost)) IperfHost = a.Gateway ?? "";
+                }
             }
         };
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task TogglePingAsync()
     {
         if (IsPinging)
         {
             _pingCts?.Cancel();
-            IsPinging = false;
-            PingButtonLabel = "PING";
             return;
         }
 
@@ -75,14 +86,17 @@ public partial class ToolsViewModel : ViewModelBase
         PingSamples.Clear();
         _seq = 0;
         _pingCts = new CancellationTokenSource();
+        var token = _pingCts.Token;
+        var host = PingHost;
         var sent = 0;
         var recv = 0;
         var times = new List<long>();
         try
         {
-            while (!_pingCts.IsCancellationRequested)
+            var source = SourceFor(host);
+            while (!token.IsCancellationRequested)
             {
-                var sample = await _probes.PingOnceAsync(PingHost, 1000, null, _pingCts.Token);
+                var sample = await _probes.PingOnceAsync(host, 1000, source, token);
                 sample = sample with { Sequence = ++_seq };
                 sent++;
                 if (sample.Success)
@@ -96,15 +110,17 @@ public partial class ToolsViewModel : ViewModelBase
                 var loss = sent == 0 ? 0 : (sent - recv) * 100d / sent;
                 var avg = times.Count == 0 ? 0 : times.Average();
                 PingStats = $"{recv}/{sent} received · {loss:0.0}% loss · min {(times.Count == 0 ? 0 : times.Min())} / avg {avg:0.0} / max {(times.Count == 0 ? 0 : times.Max())} ms";
-                await Task.Delay(1000, _pingCts.Token);
+                await Task.Delay(1000, token);
             }
         }
         catch (OperationCanceledException)
         {
             // stopped
         }
+        catch (Exception ex) { PingStats = ex.Message; }
         finally
         {
+            _pingCts?.Dispose(); _pingCts = null;
             IsPinging = false;
             PingButtonLabel = "PING";
         }
@@ -116,11 +132,13 @@ public partial class ToolsViewModel : ViewModelBase
         if (IsTracing) return;
         IsTracing = true;
         Hops.Clear();
-        var progress = new Progress<TraceHop>(h => Hops.Add(h));
+        var token = _operations.Token;
+        var progress = new Progress<TraceHop>(h => { if (!token.IsCancellationRequested) Hops.Add(h); });
         try
         {
-            await _probes.TracerouteAsync(TraceHost, progress, CancellationToken.None);
+            await _probes.TracerouteAsync(TraceHost, progress, token);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Hops.Add(new TraceHop { Ttl = 0, Address = ex.Message, TimedOut = true });
@@ -142,12 +160,21 @@ public partial class ToolsViewModel : ViewModelBase
         var ports = PortList.Split([',', ' ', ';'], StringSplitOptions.RemoveEmptyEntries)
             .Select(p => int.TryParse(p, out var n) ? n : -1)
             .Where(n => n is > 0 and < 65536)
-            .ToArray();
+            .Distinct().Take(64).ToArray();
+        var token = _operations.Token;
         try
         {
-            var results = await Task.WhenAll(ports.Select(port => _probes.ProbePortAsync(host, port, 800)));
+            var source = SourceFor(host);
+            using var gate = new SemaphoreSlim(8);
+            var results = await Task.WhenAll(ports.Select(async port =>
+            {
+                await gate.WaitAsync(token);
+                try { return await _probes.ProbePortAsync(host, port, 800, source, token); }
+                finally { gate.Release(); }
+            }));
             foreach (var result in results) Ports.Add(result);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Ports.Add(new PortProbeResult { Port = 0, Service = "Error", Open = false, ElapsedMs = 0, Error = ex.Message });
@@ -161,27 +188,33 @@ public partial class ToolsViewModel : ViewModelBase
     [RelayCommand]
     private async Task ProbeHttpAsync()
     {
+        if (IsHttp) return;
         IsHttp = true;
+        var token = _operations.Token;
         try
         {
-            HttpResult = await _probes.ProbeHttpAsync(HttpUrl);
+            HttpResult = await _probes.ProbeHttpAsync(HttpUrl, cancellationToken: token, sourceAddress: SourceFor(HttpUrl));
             HasHttpResult = HttpResult is not null;
         }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { HttpResult = new HttpProbeResult { Url = HttpUrl, Error = ex.Message }; HasHttpResult = true; }
         finally { IsHttp = false; }
     }
 
     [RelayCommand]
     private async Task RunIperfAsync()
     {
-        if (string.IsNullOrWhiteSpace(IperfHost)) return;
+        if (string.IsNullOrWhiteSpace(IperfHost) || IsIperf) return;
+        var token = _operations.Token;
         IsIperf = true;
         IperfLog = "Starting…";
         var progress = new Progress<string>(m => IperfLog = m);
         try
         {
-            var result = await _iperf.RunClientAsync(IperfHost, IperfSeconds, IperfPort, progress);
+            var result = await _iperf.RunClientAsync(IperfHost, IperfSeconds, IperfPort, progress, token);
             IperfLog = result.Error ?? result.Summary + "\n" + result.RawOutput;
         }
+        catch (OperationCanceledException) { IperfLog = "Stopped"; }
         catch (Exception ex)
         {
             IperfLog = $"iPerf3 failed: {ex.Message}";
@@ -190,6 +223,42 @@ public partial class ToolsViewModel : ViewModelBase
         {
             IsIperf = false;
         }
+    }
+
+    [RelayCommand]
+    private async Task LookupDnsAsync()
+    {
+        if (IsDns) return;
+        IsDns = true; DnsAnswers.Clear(); DnsStatus = "Querying…";
+        var token = _operations.Token;
+        try
+        {
+            var result = await _probes.LookupDnsAsync(DnsServer, DnsName, DnsType, sourceAddress: SourceFor(DnsServer), cancellationToken: token);
+            DnsStatus = result.Summary;
+            foreach (var answer in result.Answers) DnsAnswers.Add(answer);
+        }
+        catch (OperationCanceledException) { DnsStatus = "Stopped"; }
+        catch (Exception ex) { DnsStatus = ex.Message; }
+        finally { IsDns = false; }
+    }
+
+    private string? SourceFor(string destination) => _session.SelectedAdapter is { } adapter
+        ? adapter.SourceFor(destination) ?? throw new InvalidOperationException("Selected adapter has no compatible source IP address.")
+        : null;
+
+    [RelayCommand]
+    public void StopTests()
+    {
+        _pingCts?.Cancel();
+        if (IsIperfServer) _ = StopServerAsync();
+        _operations.Cancel(); _operations.Dispose(); _operations = new();
+    }
+
+    private async Task StopServerAsync()
+    {
+        try { await _iperf.StopServerAsync(); }
+        catch (Exception ex) { IperfLog = $"Unable to stop server: {ex.Message}"; }
+        finally { IsIperfServer = false; ServerButtonLabel = "START SERVER"; }
     }
 
     [RelayCommand]
@@ -207,7 +276,7 @@ public partial class ToolsViewModel : ViewModelBase
         var progress = new Progress<string>(m => IperfLog = m);
         try
         {
-            await _iperf.StartServerAsync(IperfPort, progress);
+            await _iperf.StartServerAsync(IperfPort, progress, _operations.Token);
             IsIperfServer = _iperf.IsServerRunning;
             ServerButtonLabel = IsIperfServer ? "STOP SERVER" : "START SERVER";
         }

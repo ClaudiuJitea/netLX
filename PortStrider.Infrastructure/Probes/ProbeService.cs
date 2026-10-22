@@ -33,7 +33,10 @@ public sealed class ProbeService : IProbeService
         using var ping = new Ping();
         try
         {
-            var reply = await ping.SendPingAsync(host, timeoutMs);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.IsNullOrWhiteSpace(sourceAddress) && OperatingSystem.IsLinux())
+                return await SourcePing.RunAsync(host, timeoutMs, sourceAddress, cancellationToken);
+            var reply = await ping.SendPingAsync(host, timeoutMs).WaitAsync(cancellationToken);
             return new PingSample
             {
                 Sequence = 0,
@@ -44,6 +47,7 @@ public sealed class ProbeService : IProbeService
                     : $"{reply.Status} (route via OS; source bind not supported for ICMP)"
             };
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             return new PingSample { Sequence = 0, Success = false, Status = ex.Message };
@@ -52,14 +56,15 @@ public sealed class ProbeService : IProbeService
 
     public async Task<IReadOnlyList<TraceHop>> TracerouteAsync(string host, IProgress<TraceHop> progress, CancellationToken cancellationToken = default)
     {
+        host = (IPAddress.TryParse(host, out var literal) ? literal : (await Dns.GetHostAddressesAsync(host, cancellationToken)).First()).ToString();
         if (HostOs.IsWindows)
-            return await RunProcessTraceAsync("tracert", $"-d -w 1000 -h 20 {host}", ParseWindows, progress, cancellationToken);
+            return await RunProcessTraceAsync("tracert", ["-d", "-w", "1000", "-h", "20", host], ParseWindows, progress, cancellationToken);
 
         if (await ProcessUtil.CommandExistsAsync("traceroute", cancellationToken))
-            return await RunProcessTraceAsync("traceroute", $"-n -w 1 -q 1 -m 20 {host}", ParseUnix, progress, cancellationToken);
+            return await RunProcessTraceAsync("traceroute", ["-n", "-w", "1", "-q", "1", "-m", "20", host], ParseUnix, progress, cancellationToken);
 
         if (await ProcessUtil.CommandExistsAsync("tracepath", cancellationToken))
-            return await RunProcessTraceAsync("tracepath", $"-n {host}", ParseUnix, progress, cancellationToken);
+            return await RunProcessTraceAsync("tracepath", ["-n", host], ParseUnix, progress, cancellationToken);
 
         return await FallbackTtlPingAsync(host, progress, cancellationToken);
     }
@@ -69,13 +74,9 @@ public sealed class ProbeService : IProbeService
         var sw = Stopwatch.StartNew();
         try
         {
-            using var client = new TcpClient();
-            if (!string.IsNullOrWhiteSpace(sourceAddress) && IPAddress.TryParse(sourceAddress, out var source))
-                client.Client.Bind(new IPEndPoint(source, 0));
-
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(timeoutMs);
-            await client.ConnectAsync(host, port, cts.Token);
+            using var stream = await BoundConnection.ConnectAsync(host, port, sourceAddress, cts.Token);
             sw.Stop();
             return new PortProbeResult
             {
@@ -85,6 +86,7 @@ public sealed class ProbeService : IProbeService
                 ElapsedMs = sw.ElapsedMilliseconds
             };
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             sw.Stop();
@@ -94,14 +96,14 @@ public sealed class ProbeService : IProbeService
                 Service = WellKnown.GetValueOrDefault(port, "TCP"),
                 Open = false,
                 ElapsedMs = sw.ElapsedMilliseconds,
-                Error = ex is OperationCanceledException or TimeoutException ? "timeout" : "closed"
+                Error = ex is OperationCanceledException or TimeoutException ? "timeout" : ex.Message
             };
         }
     }
 
-    public async Task<HttpProbeResult> ProbeHttpAsync(string url, string? proxyUrl = null, CancellationToken cancellationToken = default, string? proxyUsername = null, string? proxyPassword = null)
+    public async Task<HttpProbeResult> ProbeHttpAsync(string url, string? proxyUrl = null, CancellationToken cancellationToken = default, string? proxyUsername = null, string? proxyPassword = null, string? sourceAddress = null)
     {
-        string? subject = null, issuer = null, tls = null;
+        string? subject = null, issuer = null, tls = null, certificateError = null;
         DateTimeOffset? notAfter = null;
 
         using var handler = new SocketsHttpHandler
@@ -122,13 +124,22 @@ public sealed class ProbeService : IProbeService
                         issuer = cert.Issuer;
                     }
 
-                    return errors == SslPolicyErrors.None || url.Contains("1.1.1.1", StringComparison.Ordinal);
+                    certificateError = errors == SslPolicyErrors.None ? null : errors.ToString();
+                    return errors == SslPolicyErrors.None;
                 }
             }
         };
 
         try
         {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var target) || target.Scheme is not ("http" or "https"))
+                throw new ArgumentException("Enter an HTTP(S) URL.");
+            if (!string.IsNullOrWhiteSpace(sourceAddress))
+            {
+                _ = BoundConnection.ParseSource(sourceAddress);
+                handler.ConnectCallback = async (context, ct) =>
+                    await BoundConnection.ConnectAsync(context.DnsEndPoint.Host, context.DnsEndPoint.Port, sourceAddress, ct);
+            }
             if (!string.IsNullOrWhiteSpace(proxyUrl))
                 handler.Proxy = CreateProxy(proxyUrl, proxyUsername, proxyPassword);
             using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
@@ -139,6 +150,9 @@ public sealed class ProbeService : IProbeService
             return new HttpProbeResult
             {
                 Url = url,
+                FinalUrl = response.RequestMessage?.RequestUri?.ToString(),
+                SourceAddress = sourceAddress,
+                CertificateError = certificateError,
                 StatusCode = (int)response.StatusCode,
                 ElapsedMs = sw.ElapsedMilliseconds,
                 TlsProtocol = tls,
@@ -147,12 +161,15 @@ public sealed class ProbeService : IProbeService
                 CertificateNotAfter = notAfter
             };
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return new HttpProbeResult
             {
                 Url = url,
-                Error = ex.Message,
+                Error = certificateError is null ? ex.Message : $"TLS validation failed: {certificateError}",
+                CertificateError = certificateError,
+                SourceAddress = sourceAddress,
                 CertificateSubject = subject,
                 CertificateIssuer = issuer,
                 CertificateNotAfter = notAfter,
@@ -172,80 +189,51 @@ public sealed class ProbeService : IProbeService
         };
     }
 
+    public Task<DnsLookupResult> LookupDnsAsync(string server, string name, DnsRecordType type, int timeoutMs = 3000,
+        string? sourceAddress = null, CancellationToken cancellationToken = default) =>
+        new DnsLookupClient().QueryAsync(server, name, type, timeoutMs, sourceAddress, cancellationToken);
+
     public async Task<PingSample> QueryDnsAsync(string server, string name, int timeoutMs, string? sourceAddress = null, CancellationToken cancellationToken = default)
     {
-        if (!IPAddress.TryParse(server, out var serverIp))
-            return new PingSample { Sequence = 0, Success = false, Status = "invalid server address" };
-
-        var id = (ushort)Random.Shared.Next(1, ushort.MaxValue);
-        var query = DnsWire.BuildAQuery(id, name);
-        var sw = Stopwatch.StartNew();
-        try
-        {
-            using var udp = new UdpClient(serverIp.AddressFamily);
-            if (!string.IsNullOrWhiteSpace(sourceAddress) && IPAddress.TryParse(sourceAddress, out var src) && src.AddressFamily == serverIp.AddressFamily)
-                udp.Client.Bind(new IPEndPoint(src, 0));
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(timeoutMs);
-            await udp.SendAsync(query, query.Length, new IPEndPoint(serverIp, 53));
-            while (true)
-            {
-                var result = await udp.ReceiveAsync(cts.Token);
-                if (!DnsWire.TryParseResponse(result.Buffer, id, out var rcode, out var answer)) continue;
-                sw.Stop();
-                var ok = rcode == 0;
-                return new PingSample
-                {
-                    Sequence = 0,
-                    Success = ok,
-                    RoundtripMs = sw.ElapsedMilliseconds,
-                    Status = ok ? answer ?? "no A record" : DnsWire.RcodeName(rcode)
-                };
-            }
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return new PingSample { Sequence = 0, Success = false, RoundtripMs = sw.ElapsedMilliseconds, Status = "timeout" };
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new PingSample { Sequence = 0, Success = false, RoundtripMs = sw.ElapsedMilliseconds, Status = ex.Message };
-        }
+        var result = await LookupDnsAsync(server, name, DnsRecordType.A, timeoutMs, sourceAddress, cancellationToken);
+        return new PingSample { Sequence = 0, Success = result.Success, RoundtripMs = result.ElapsedMs,
+            SourceBound = !string.IsNullOrWhiteSpace(sourceAddress),
+            Status = result.Success ? string.Join(", ", result.Answers.Where(a => a.Type == "A").Select(a => a.Value)) : result.Error ?? result.Status };
     }
 
     private static async Task<IReadOnlyList<TraceHop>> RunProcessTraceAsync(
-        string file, string args, Func<string, TraceHop?> parse, IProgress<TraceHop> progress, CancellationToken cancellationToken)
+        string file, string[] args, Func<string, TraceHop?> parse, IProgress<TraceHop> progress, CancellationToken cancellationToken)
     {
         var hops = new List<TraceHop>();
         var psi = new ProcessStartInfo
         {
             FileName = file,
-            Arguments = args,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        foreach (var argument in args) psi.ArgumentList.Add(argument);
         using var process = Process.Start(psi);
         if (process is null) return hops;
-        while (!process.HasExited)
+        var errors = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
-            if (line is null) break;
-            var hop = parse(line);
-            if (hop is null) continue;
-            hops.Add(hop);
-            progress.Report(hop);
+            while (await process.StandardOutput.ReadLineAsync(cancellationToken) is { } line)
+            {
+                var hop = parse(line);
+                if (hop is null) continue;
+                hops.Add(hop); progress.Report(hop);
+            }
+            await process.WaitForExitAsync(cancellationToken);
+            var error = await errors;
+            if (process.ExitCode != 0 && hops.Count == 0) throw new InvalidOperationException(error.Trim());
+            return hops;
         }
-
-        await process.WaitForExitAsync(cancellationToken);
-        return hops;
+        finally
+        {
+            if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(CancellationToken.None); }
+        }
     }
 
     private static TraceHop? ParseUnix(string line)
@@ -275,6 +263,7 @@ public sealed class ProbeService : IProbeService
     {
         IPAddress address;
         try { address = (await Dns.GetHostAddressesAsync(host, cancellationToken))[0]; }
+        catch (OperationCanceledException) { throw; }
         catch { return []; }
 
         var hops = new List<TraceHop>();
@@ -287,7 +276,7 @@ public sealed class ProbeService : IProbeService
             options.Ttl = ttl;
             try
             {
-                var reply = await ping.SendPingAsync(address, 1000, buffer, options);
+                var reply = await ping.SendPingAsync(address, 1000, buffer, options).WaitAsync(cancellationToken);
                 var hop = new TraceHop
                 {
                     Ttl = ttl,
@@ -299,6 +288,7 @@ public sealed class ProbeService : IProbeService
                 progress.Report(hop);
                 if (reply.Status == IPStatus.Success) break;
             }
+            catch (OperationCanceledException) { throw; }
             catch
             {
                 var hop = new TraceHop { Ttl = ttl, Address = "*", Rtt = "*", TimedOut = true };

@@ -15,8 +15,17 @@ namespace PortStrider.Infrastructure.Adapters;
 public sealed partial class InterfaceConfigService : IInterfaceConfigService
 {
     private static readonly TimeSpan CarrierWait = TimeSpan.FromSeconds(12);
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, Task<PrivilegedProcess.Result>>? _runCommand;
 
-    public bool IsSupported => HostOs.IsLinux && ProcessUtil.FindCommand("ip") is not null;
+    public InterfaceConfigService() { }
+
+    internal InterfaceConfigService(Func<string, IReadOnlyList<string>, CancellationToken, Task<PrivilegedProcess.Result>> runCommand)
+        => _runCommand = runCommand;
+
+    private Task<PrivilegedProcess.Result> RunAsync(string file, IReadOnlyList<string> args, CancellationToken ct)
+        => _runCommand?.Invoke(file, args, ct) ?? PrivilegedProcess.RunAsync(file, args, ct, TimeSpan.FromSeconds(20));
+
+    public bool IsSupported => _runCommand is not null || HostOs.IsLinux && ProcessUtil.FindCommand("ip") is not null;
 
     public bool RequiresChanges(TestProfile profile) =>
         !string.IsNullOrWhiteSpace(profile.OverrideMac)
@@ -75,23 +84,24 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
                 else if (!string.Equals(wanted, NormalizeMac(adapter.MacAddress), StringComparison.OrdinalIgnoreCase))
                 {
                     progress?.Report($"Setting MAC {wanted} on {baseIface}…");
-                    var original = NormalizeMac(adapter.MacAddress) ?? LinuxSysFs.Read(LinuxSysFs.Net(baseIface, "address"));
+                    var original = NormalizeMac(adapter.MacAddress) ?? NormalizeMac(LinuxSysFs.Read(LinuxSysFs.Net(baseIface, "address")));
+                    if (original is null) throw new InvalidOperationException("Cannot read original MAC; override was not applied.");
+                    // Register before changing link state so partial failures and cancellation are reversible.
+                    var flags = LinuxSysFs.Read(LinuxSysFs.Net(baseIface, "flags"));
+                    var originalState = flags is not null && uint.TryParse(flags.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber,
+                        null, out var value) && (value & 1) == 0 ? "down" : "up";
+                    undo.Push(async ct =>
+                    {
+                        await Ip(["link", "set", "dev", baseIface, "down"], ct);
+                        await Ip(["link", "set", "dev", baseIface, "address", original], ct);
+                        await Ip(["link", "set", "dev", baseIface, originalState], ct);
+                    });
                     var ok = await Ip(["link", "set", "dev", baseIface, "down"], cancellationToken)
                              && await Ip(["link", "set", "dev", baseIface, "address", wanted], cancellationToken)
                              && await Ip(["link", "set", "dev", baseIface, "up"], cancellationToken);
                     if (ok)
                     {
                         applied.Add($"MAC {wanted}");
-                        if (original is not null)
-                        {
-                            undo.Push(async ct =>
-                            {
-                                await Ip(["link", "set", "dev", baseIface, "down"], ct);
-                                await Ip(["link", "set", "dev", baseIface, "address", original], ct);
-                                await Ip(["link", "set", "dev", baseIface, "up"], ct);
-                            });
-                        }
-
                         await WaitForCarrierAsync(baseIface, cancellationToken);
                     }
                     else
@@ -105,23 +115,30 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
             // 2. Forced speed / duplex
             if (profile.LinkSpeed != LinkSpeedSetting.Auto || profile.LinkDuplex != DuplexSetting.Auto)
             {
-                if (ProcessUtil.FindCommand("ethtool") is null)
+                if (_runCommand is null && ProcessUtil.FindCommand("ethtool") is null)
                 {
                     problems.Add("ethtool is not installed; cannot force speed/duplex");
                 }
                 else
                 {
+                    var before = await RunAsync("ethtool", [baseIface], cancellationToken);
+                    var original = EthtoolSettings.Parse(before.StandardOutput);
+                    List<string> restore = ["-s", baseIface, "autoneg", original.AutoNegotiation];
+                    if (!before.Success || original.AutoNegotiation is not ("on" or "off")
+                        || original.AutoNegotiation == "off" && (original.SpeedMbps <= 0 || original.Duplex is not ("Full" or "Half")))
+                        throw new InvalidOperationException("Cannot read original link settings; forced mode was not applied.");
+                    if (original.AutoNegotiation == "off") restore.AddRange(["speed", original.SpeedMbps.ToString(), "duplex", original.Duplex.ToLowerInvariant()]);
                     var speed = SpeedMbps(profile.LinkSpeed);
                     var duplex = profile.LinkDuplex == DuplexSetting.Half ? "half" : "full";
                     List<string> args = ["-s", baseIface, "autoneg", "off"];
                     if (speed > 0) args.AddRange(["speed", speed.ToString()]);
                     args.AddRange(["duplex", duplex]);
                     progress?.Report($"Forcing {(speed > 0 ? speed + " Mb/s " : "")}{duplex} duplex on {baseIface}…");
-                    var result = await PrivilegedProcess.RunAsync("ethtool", args, cancellationToken);
+                    undo.Push(ct => RunAsync("ethtool", restore, ct));
+                    var result = await RunAsync("ethtool", args, cancellationToken);
                     if (result.Success)
                     {
                         applied.Add($"link {(speed > 0 ? speed + " Mb/s" : "")} {duplex}".Trim());
-                        undo.Push(ct => PrivilegedProcess.RunAsync("ethtool", ["-s", baseIface, "autoneg", "on"], ct));
                         await WaitForCarrierAsync(baseIface, cancellationToken);
                     }
                     else
@@ -138,21 +155,20 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
                 var pri = Math.Clamp(profile.VlanPriority, 0, 7);
                 var name = VlanInterfaceName(baseIface, vid);
                 progress?.Report($"Creating {name} (VLAN {vid}, priority {pri})…");
-                await Ip(["link", "del", name], cancellationToken); // stale from a previous crash
                 var qos = string.Join(' ', Enumerable.Range(0, 8).Select(p => $"{p}:{pri}"));
-                var ok = await Ip(["link", "add", "link", baseIface, "name", name, "type", "vlan", "id", vid.ToString(), "egress-qos-map", .. qos.Split(' ')], cancellationToken)
-                         && await Ip(["link", "set", "dev", name, "up"], cancellationToken);
-                if (ok)
+                // Never remove or take ownership of an interface that already exists.
+                if (!await Ip(["link", "add", "link", baseIface, "name", name, "type", "vlan", "id", vid.ToString(), "egress-qos-map", .. qos.Split(' ')], cancellationToken))
+                    throw new InvalidOperationException($"VLAN creation refused ({LastError}); existing interfaces were left intact.");
+                undo.Push(ct => Ip(["link", "del", name], ct));
+                if (await Ip(["link", "set", "dev", name, "up"], cancellationToken))
                 {
                     effective = name;
                     applied.Add($"VLAN {vid} pri {pri} → {name}");
-                    undo.Push(ct => Ip(["link", "del", name], ct));
                     await WaitForCarrierAsync(name, cancellationToken);
                 }
                 else
                 {
-                    await Ip(["link", "del", name], cancellationToken);
-                    problems.Add($"VLAN sub-interface failed ({LastError})");
+                    throw new InvalidOperationException($"VLAN sub-interface failed ({LastError})");
                 }
             }
 
@@ -168,16 +184,18 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
                 {
                     var iface = effective;
                     progress?.Report($"Adding {cidr} on {iface}…");
-                    if (await Ip(["addr", "replace", cidr, "dev", iface], cancellationToken))
+                    if (await Ip(["addr", "add", cidr, "dev", iface], cancellationToken))
                     {
                         applied.Add($"static {cidr}");
                         undo.Push(ct => Ip(["addr", "del", cidr, "dev", iface], ct));
 
-                        if (!string.IsNullOrWhiteSpace(profile.StaticGateway) && IPAddress.TryParse(profile.StaticGateway, out _))
+                        if (!string.IsNullOrWhiteSpace(profile.StaticGateway))
                         {
                             var gw = profile.StaticGateway;
-                            // Metric 50 keeps the host's existing default route intact; ours only wins for this NIC.
-                            if (await Ip(["route", "replace", "default", "via", gw, "dev", iface, "metric", "50"], cancellationToken))
+                            if (!IPAddress.TryParse(gw, out var gatewayIp) || gatewayIp.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                                throw new InvalidOperationException("Static gateway must be an IPv4 address.");
+                            // Add a temporary route without replacing any existing route with the same metric.
+                            if (await Ip(["route", "add", "default", "via", gw, "dev", iface, "metric", "50"], cancellationToken))
                             {
                                 applied.Add($"gateway {gw}");
                                 undo.Push(ct => Ip(["route", "del", "default", "via", gw, "dev", iface, "metric", "50"], ct));
@@ -205,6 +223,8 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
             problems.Add(ex.Message);
         }
 
+        if (problems.Count > 0) await RestoreAsync(CancellationToken.None);
+
         var status = problems.Count == 0 ? TestStatus.Pass : applied.Count > 0 ? TestStatus.Warning : TestStatus.Fail;
         var summary = (applied.Count > 0 ? string.Join(" · ", applied) : "No changes applied")
                       + (problems.Count > 0 ? " — " + string.Join("; ", problems) : "");
@@ -221,13 +241,13 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
         if (cidr is null) return $"'{address}' / '{subnetMask}' is not a valid IPv4 address";
         var iface = session.EffectiveInterface;
 
-        if (!await Ip(["addr", "replace", cidr, "dev", iface], cancellationToken))
-            return $"ip addr replace refused: {LastError}";
+        if (!await Ip(["addr", "add", cidr, "dev", iface], cancellationToken))
+            return $"ip addr add refused: {LastError}";
         session.AddUndo(ct => Ip(["addr", "del", cidr, "dev", iface], ct));
 
         if (!string.IsNullOrWhiteSpace(gateway) && IPAddress.TryParse(gateway, out _))
         {
-            if (!await Ip(["route", "replace", "default", "via", gateway, "dev", iface, "metric", "50"], cancellationToken))
+            if (!await Ip(["route", "add", "default", "via", gateway, "dev", iface, "metric", "50"], cancellationToken))
                 return $"default route via {gateway} refused: {LastError}";
             session.AddUndo(ct => Ip(["route", "del", "default", "via", gateway, "dev", iface, "metric", "50"], ct));
         }
@@ -269,7 +289,7 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
 
     private async Task<bool> Ip(IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
-        var result = await PrivilegedProcess.RunAsync("ip", args, cancellationToken, TimeSpan.FromSeconds(20));
+        var result = await RunAsync("ip", args, cancellationToken);
         if (!result.Success) _lastError = Trim(result.Combined.Length == 0 ? $"exit {result.ExitCode}" : result.Combined);
         return result.Success;
     }
@@ -309,7 +329,9 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
         if (address.Contains('/'))
         {
             var parts = address.Split('/');
-            return IPAddress.TryParse(parts[0], out _) && int.TryParse(parts[1], out var p) && p is >= 0 and <= 32 ? $"{parts[0]}/{p}" : null;
+            return parts.Length == 2 && IPAddress.TryParse(parts[0], out var parsed)
+                && parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                && int.TryParse(parts[1], out var p) && p is >= 0 and <= 32 ? $"{parsed}/{p}" : null;
         }
 
         if (!IPAddress.TryParse(address, out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return null;
@@ -318,10 +340,12 @@ public sealed partial class InterfaceConfigService : IInterfaceConfigService
         {
             if (int.TryParse(subnet.TrimStart('/'), out var p) && p is >= 0 and <= 32)
                 prefix = p;
-            else if (IPAddress.TryParse(subnet, out var mask))
+            else if (IPAddress.TryParse(subnet, out var mask) && mask.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
             {
-                var bits = mask.GetAddressBytes().Sum(b => System.Numerics.BitOperations.PopCount(b));
-                prefix = bits;
+                var bits = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(mask.GetAddressBytes());
+                var inverse = ~bits;
+                if ((inverse & unchecked(inverse + 1)) != 0) return null; // mask must contain contiguous leading ones
+                prefix = System.Numerics.BitOperations.PopCount(bits);
             }
             else return null;
         }

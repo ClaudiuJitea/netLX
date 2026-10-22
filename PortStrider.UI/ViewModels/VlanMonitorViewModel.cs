@@ -23,6 +23,7 @@ public partial class VlanMonitorViewModel : ViewModelBase
     {
         _monitor = monitor;
         _session = session;
+        _session.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(AppSession.SelectedAdapter) && IsRunning) _ = StopAsync(); };
         _monitor.Updated += (_, rows) => Dispatcher.UIThread.Post(() => Refresh(rows));
     }
 
@@ -56,6 +57,6 @@ public partial class VlanMonitorViewModel : ViewModelBase
         Observations.Clear();
         foreach (var row in rows) Observations.Add(row);
         OnPropertyChanged(nameof(HasObservations));
-        Status = rows.Count == 0 ? "No VLAN-tagged traffic observed yet." : $"Top {rows.Count} VLAN(s)";
+        Status = rows.Count == 0 ? "No traffic observed yet." : "Traffic share by bytes · outer VLAN tags";
     }
 }

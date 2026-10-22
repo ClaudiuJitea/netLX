@@ -53,21 +53,8 @@ public sealed class NetworkAdapterService : IAdapterService
                 .Select(g => g.Address.ToString())
                 .FirstOrDefault(a => a is not "0.0.0.0");
 
-            pcapMap.TryGetValue(ni.Name, out var pcapName);
-            if (pcapName is null)
-            {
-                foreach (var kv in pcapMap)
-                {
-                    if (ni.Description.Contains(kv.Key, StringComparison.OrdinalIgnoreCase)
-                        || kv.Key.Contains(ni.Name, StringComparison.OrdinalIgnoreCase)
-                        || kv.Value.Contains(ni.Description, StringComparison.OrdinalIgnoreCase)
-                        || kv.Value.Contains(ni.Name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        pcapName = kv.Value;
-                        break;
-                    }
-                }
-            }
+            pcapMap.TryGetValue(ni.Id, out var pcapName);
+            if (pcapName is null) pcapMap.TryGetValue(ni.Name, out pcapName);
 
             var duplex = HostOs.IsLinux ? LinuxSysFs.Read(LinuxSysFs.Net(ni.Name, "duplex")) : null;
             var sysSpeed = HostOs.IsLinux ? LinuxSysFs.ReadInt64(LinuxSysFs.Net(ni.Name, "speed")) : null;
@@ -182,18 +169,22 @@ public sealed class NetworkAdapterService : IAdapterService
 
     private static Dictionary<string, string> MapPcapDevices()
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var aliases = new List<KeyValuePair<string, string>>();
         try
         {
             foreach (var device in CaptureDeviceList.Instance)
             {
-                map[device.Name] = device.Name;
+                aliases.Add(new(device.Name, device.Name));
                 if (device is LibPcapLiveDevice live)
                 {
                     if (!string.IsNullOrWhiteSpace(live.Interface.FriendlyName))
-                        map[live.Interface.FriendlyName] = live.Name;
-                    if (!string.IsNullOrWhiteSpace(live.Description))
-                        map[live.Description] = live.Name;
+                        aliases.Add(new(live.Interface.FriendlyName, live.Name));
+                    var brace = live.Name.LastIndexOf('{');
+                    if (brace >= 0 && Guid.TryParse(live.Name[brace..], out var id))
+                    {
+                        aliases.Add(new(id.ToString("D"), live.Name));
+                        aliases.Add(new(id.ToString("B"), live.Name));
+                    }
                 }
             }
         }
@@ -202,7 +193,9 @@ public sealed class NetworkAdapterService : IAdapterService
             // libpcap / Npcap missing — adapter list still works without capture names.
         }
 
-        return map;
+        return aliases.GroupBy(a => a.Key, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Select(a => a.Value).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
+            .ToDictionary(g => g.Key, g => g.First().Value, StringComparer.OrdinalIgnoreCase);
     }
 
     private static string[] SafeDhcp(IPInterfaceProperties props)
