@@ -42,6 +42,8 @@ public sealed record TestProfile
     public LinkSpeedSetting LinkSpeed { get; init; } = LinkSpeedSetting.Auto;
     public DuplexSetting LinkDuplex { get; init; } = DuplexSetting.Auto;
     public string? ProxyUrl { get; init; }
+    public string? ProxyUsername { get; init; }
+    public string? ProxyPassword { get; init; }
     /// <summary>Step id after which AutoTest stops: link, 8021x, vlan, dhcp, gw, dns, target-&lt;id&gt;, poe. Empty runs everything.</summary>
     public string StopAfterStepId { get; init; } = "";
     public string DnsQueryName { get; init; } = "cloudflare.com";

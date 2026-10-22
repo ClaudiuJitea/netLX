@@ -26,6 +26,8 @@ public partial class ProfilesViewModel : ViewModelBase
     [ObservableProperty] private DhcpOptionKind _dhcpOption = DhcpOptionKind.None;
     [ObservableProperty] private string _dhcpVendorClass = "";
     [ObservableProperty] private string _proxyUrl = "";
+    [ObservableProperty] private string _proxyUsername = "";
+    [ObservableProperty] private string _proxyPassword = "";
     [ObservableProperty] private int? _vlanId;
     [ObservableProperty] private int _vlanPriority;
     [ObservableProperty] private CableUnit _cableUnit = CableUnit.Meters;
@@ -96,6 +98,8 @@ public partial class ProfilesViewModel : ViewModelBase
         DhcpOption = value.DhcpOption;
         DhcpVendorClass = value.DhcpVendorClass ?? "";
         ProxyUrl = value.ProxyUrl ?? "";
+        ProxyUsername = value.ProxyUsername ?? "";
+        ProxyPassword = value.ProxyPassword ?? "";
         VlanId = value.VlanId;
         VlanPriority = Math.Clamp(value.VlanPriority, 0, 7);
         CableUnit = value.CableUnit;
@@ -140,6 +144,14 @@ public partial class ProfilesViewModel : ViewModelBase
     private void Save()
     {
         if (Selected is null) return;
+        if (!string.IsNullOrWhiteSpace(ProxyUrl)
+            && (!Uri.TryCreate(ProxyUrl.Trim(), UriKind.Absolute, out var proxy)
+                || proxy.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(proxy.Host)
+                || !string.IsNullOrEmpty(proxy.UserInfo)))
+        {
+            Status = "Enter an HTTP(S) proxy URL; use the separate fields for credentials.";
+            return;
+        }
         var updated = Selected with
         {
             AdapterId = _session.SelectedAdapter?.Id,
@@ -148,7 +160,9 @@ public partial class ProfilesViewModel : ViewModelBase
             AddressMode = AddressMode,
             DhcpOption = DhcpOption,
             DhcpVendorClass = DhcpVendorClass,
-            ProxyUrl = ProxyUrl,
+            ProxyUrl = NullIfEmpty(ProxyUrl),
+            ProxyUsername = NullIfEmpty(ProxyUsername),
+            ProxyPassword = string.IsNullOrEmpty(ProxyPassword) ? null : ProxyPassword,
             VlanId = VlanId is > 0 ? VlanId : null,
             VlanPriority = VlanPriority,
             CableUnit = CableUnit,

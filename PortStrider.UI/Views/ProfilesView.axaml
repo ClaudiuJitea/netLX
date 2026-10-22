@@ -198,6 +198,10 @@
                                     <TextBlock Text="PROXY URL" Classes="kicker"/>
                                     <TextBox Classes="field" Watermark="http://proxy.example:8080"
                                              Text="{Binding ProxyUrl}"/>
+                                    <TextBox Classes="field" Watermark="Proxy username (optional)" Text="{Binding ProxyUsername}"/>
+                                    <TextBox Classes="field" Watermark="Proxy password" PasswordChar="●" Text="{Binding ProxyPassword}"/>
+                                    <TextBlock Text="Password is stored locally and omitted from profile exports."
+                                               Classes="muted" FontSize="11" TextWrapping="Wrap"/>
                                     <TextBlock Text="Used by HTTP and TLS validation targets."
                                                Classes="muted" FontSize="11"/>
                                 </StackPanel>

@@ -99,12 +99,12 @@ public sealed class ProbeService : IProbeService
         }
     }
 
-    public async Task<HttpProbeResult> ProbeHttpAsync(string url, string? proxyUrl = null, CancellationToken cancellationToken = default)
+    public async Task<HttpProbeResult> ProbeHttpAsync(string url, string? proxyUrl = null, CancellationToken cancellationToken = default, string? proxyUsername = null, string? proxyPassword = null)
     {
         string? subject = null, issuer = null, tls = null;
         DateTimeOffset? notAfter = null;
 
-        var handler = new SocketsHttpHandler
+        using var handler = new SocketsHttpHandler
         {
             SslOptions =
             {
@@ -127,11 +127,10 @@ public sealed class ProbeService : IProbeService
             }
         };
 
-        if (!string.IsNullOrWhiteSpace(proxyUrl))
-            handler.Proxy = new WebProxy(proxyUrl);
-
         try
         {
+            if (!string.IsNullOrWhiteSpace(proxyUrl))
+                handler.Proxy = CreateProxy(proxyUrl, proxyUsername, proxyPassword);
             using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
             var sw = Stopwatch.StartNew();
             using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -160,6 +159,17 @@ public sealed class ProbeService : IProbeService
                 TlsProtocol = tls
             };
         }
+    }
+
+    internal static WebProxy CreateProxy(string url, string? username, string? password)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")
+            || string.IsNullOrWhiteSpace(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
+            throw new ArgumentException("Use an HTTP(S) proxy URL and enter credentials in the separate username/password fields.");
+        return new WebProxy(uri)
+        {
+            Credentials = string.IsNullOrEmpty(username) ? null : new NetworkCredential(username, password)
+        };
     }
 
     public async Task<PingSample> QueryDnsAsync(string server, string name, int timeoutMs, string? sourceAddress = null, CancellationToken cancellationToken = default)

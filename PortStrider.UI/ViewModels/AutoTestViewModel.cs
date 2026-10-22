@@ -260,6 +260,7 @@ public partial class AutoTestViewModel : ViewModelBase
             Overall = OverallLabel,
             Ipv4 = adapter.Ipv4 ?? "",
             Ipv6 = adapter.Ipv6 ?? "",
+            Ipv6LinkLocal = adapter.Ipv6LinkLocal ?? "",
             Gateway = adapter.Gateway ?? ""
         };
 

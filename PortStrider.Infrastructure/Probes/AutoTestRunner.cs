@@ -86,6 +86,7 @@ public sealed class AutoTestRunner : IAutoTestService
             Overall = overall ?? Overall(steps),
             Ipv4 = effective.Ipv4 ?? dhcp?.OfferedIp ?? "",
             Ipv6 = effective.Ipv6 ?? "",
+            Ipv6LinkLocal = effective.Ipv6LinkLocal ?? "",
             Gateway = effective.Gateway ?? dhcp?.Gateway ?? "",
             Steps = steps.ToArray(),
             Targets = targets.ToArray(),
@@ -143,16 +144,18 @@ public sealed class AutoTestRunner : IAutoTestService
                 if (StopAfter(StepDot1x)) return Build();
             }
 
+            effective = _adapters.Find(effective.Name) ?? effective;
+
             // ── Addressing / DHCP ─────────────────────────────────────────────────────────────────────────
             if (profile.AddressMode == AddressMode.Dhcp)
             {
-                Report(StepDhcp, "DHCP", TestStatus.Running, $"Discover on {effective.Name}…");
+                Report(StepDhcp, "DHCP", TestStatus.Running, $"Checking DHCP on {effective.Name}…");
                 dhcp = await _dhcp.DiscoverAsync(effective, profile, allowRenew: false, cancellationToken);
                 Report(StepDhcp, "DHCP", dhcp.Status, DescribeDhcp(dhcp));
 
                 // On a temporary VLAN sub-interface nobody else will configure the lease, so we do — otherwise the
                 // gateway/DNS/target steps would leave through the untagged interface.
-                if (cfg is { IsSubInterface: true } && dhcp.AckReceived && dhcp.OfferedIp is not null)
+                if (cfg is { IsSubInterface: true } && dhcp.LeaseAcquired && dhcp.OfferedIp is not null)
                 {
                     var error = await _ifconfig.ApplyAddressAsync(cfg, dhcp.OfferedIp, dhcp.Subnet, FirstAddress(dhcp.Gateway), cancellationToken);
                     if (error is not null)
@@ -171,7 +174,7 @@ public sealed class AutoTestRunner : IAutoTestService
             if (string.IsNullOrWhiteSpace(ipv4))
             {
                 var why = profile.AddressMode == AddressMode.Dhcp
-                    ? (dhcp?.AckReceived == true ? $"Server offered {dhcp.OfferedIp} but the OS has no lease on {effective.Name}" : "No IPv4 address and no DHCP lease")
+                    ? (dhcp?.LeaseAcquired == true ? $"Server offered {dhcp.OfferedIp} but the OS has no lease on {effective.Name}" : "No IPv4 address and no DHCP lease")
                     : "Static mode but no address configured";
                 Report(StepAddressing, "Addressing", TestStatus.Warning, why);
             }
@@ -190,12 +193,12 @@ public sealed class AutoTestRunner : IAutoTestService
             {
                 var sub = cfg is { IsSubInterface: true };
                 var status = !sub ? (_ifconfig.IsSupported ? TestStatus.Fail : TestStatus.Warning)
-                    : dhcp is { AckReceived: true } ? TestStatus.Pass
+                    : dhcp is { LeaseAcquired: true } ? TestStatus.Pass
                     : dhcp is { Status: TestStatus.Fail } ? TestStatus.Fail
                     : TestStatus.Warning;
                 var summary = !sub
                     ? $"VLAN {profile.VlanId} requested but no tagged sub-interface could be created ({cfg?.Result.Summary ?? "unsupported here"})"
-                    : dhcp is { AckReceived: true }
+                    : dhcp is { LeaseAcquired: true }
                         ? $"VID {profile.VlanId} · PRI {profile.VlanPriority} · DHCP lease {dhcp.OfferedIp} received on the tagged interface"
                         : $"VID {profile.VlanId} · PRI {profile.VlanPriority} · tagged interface up, {(dhcp?.Summary ?? "no DHCP attempt")}";
                 vlan = new VlanTestResult
@@ -214,13 +217,15 @@ public sealed class AutoTestRunner : IAutoTestService
             if (profile.EnableIpv6)
             {
                 Report(StepIpv6, "IPv6 connectivity", TestStatus.Running, "Checking IPv6…");
+                var addressing = Ipv6Addressing.Describe(effective);
                 if (string.IsNullOrWhiteSpace(effective.Ipv6))
-                    Report(StepIpv6, "IPv6 connectivity", TestStatus.Skipped, "No IPv6 address on adapter");
+                    Report(StepIpv6, "IPv6 connectivity", effective.Ipv6LinkLocal is null ? TestStatus.Skipped : TestStatus.Warning,
+                        addressing + " · global reachability not tested");
                 else
                 {
                     var v6 = await _probes.PingOnceAsync("2606:4700:4700::1111", 1500, effective.Ipv6, cancellationToken);
                     Report(StepIpv6, "IPv6 connectivity", v6.Success ? TestStatus.Pass : TestStatus.Warning,
-                        v6.Success ? $"{effective.Ipv6} · RTT {v6.RoundtripMs} ms" : $"{effective.Ipv6} · {v6.Status}",
+                        v6.Success ? $"{addressing} · RTT {v6.RoundtripMs} ms" : $"{addressing} · {v6.Status}",
                         "2606:4700:4700::1111");
                 }
             }
@@ -295,7 +300,7 @@ public sealed class AutoTestRunner : IAutoTestService
                     case TargetKind.Http:
                     {
                         var url = string.IsNullOrWhiteSpace(target.Url) ? $"https://{host}" : target.Url;
-                        var http = await _probes.ProbeHttpAsync(url, profile.ProxyUrl, cancellationToken);
+                        var http = await _probes.ProbeHttpAsync(url, profile.ProxyUrl, cancellationToken, profile.ProxyUsername, profile.ProxyPassword);
                         sw.Stop();
                         var status = http.Success ? TestStatus.Pass : TestStatus.Fail;
                         var details = http.Error ?? $"HTTP {http.StatusCode} in {http.ElapsedMs} ms"

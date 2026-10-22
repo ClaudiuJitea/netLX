@@ -164,6 +164,7 @@ public sealed record SessionReport
     public string Overall { get; init; } = "";
     public string Ipv4 { get; init; } = "";
     public string Ipv6 { get; init; } = "";
+    public string Ipv6LinkLocal { get; init; } = "";
     public string Gateway { get; init; } = "";
     public SwitchInfo? Switch { get; init; }
     public DhcpTestResult? Dhcp { get; init; }

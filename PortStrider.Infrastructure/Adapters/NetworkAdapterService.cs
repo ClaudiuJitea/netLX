@@ -29,12 +29,17 @@ public sealed class NetworkAdapterService : IAdapterService
             string? ipv4 = null;
             string? mask = null;
             string? ipv6 = null;
+            string? ipv6LinkLocal = null;
             foreach (var addr in props.UnicastAddresses)
             {
                 if (addr.Address.AddressFamily == AddressFamily.InterNetwork && ipv4 is null)
                 {
                     ipv4 = addr.Address.ToString();
                     mask = addr.IPv4Mask.ToString();
+                }
+                else if (addr.Address.IsIPv6LinkLocal && ipv6LinkLocal is null)
+                {
+                    ipv6LinkLocal = addr.Address.ToString();
                 }
                 else if (addr.Address.AddressFamily == AddressFamily.InterNetworkV6
                          && !addr.Address.IsIPv6LinkLocal
@@ -90,6 +95,7 @@ public sealed class NetworkAdapterService : IAdapterService
                 MacAddress = FormatMac(ni.GetPhysicalAddress()),
                 Ipv4 = ipv4,
                 Ipv6 = ipv6,
+                Ipv6LinkLocal = ipv6LinkLocal,
                 SubnetMask = mask,
                 Gateway = gw,
                 DnsServers = props.DnsAddresses.Select(a => a.ToString()).Distinct().ToArray(),

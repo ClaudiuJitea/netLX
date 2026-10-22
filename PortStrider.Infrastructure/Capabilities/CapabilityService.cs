@@ -20,10 +20,9 @@ public sealed class CapabilityService : ICapabilityService
                 adapter.PcapName is null ? "No capture device mapped — install libpcap/Npcap." : "Passive decode from wire."),
             Feature("capture", "Packet capture", adapter.PcapName is null ? CapabilityLevel.Unavailable : CapabilityLevel.Supported,
                 "Requires libpcap/Npcap and capture privileges.", adapter.PcapName is null ? "Install libpcap/Npcap." : null),
-            Feature("dhcp", "Active DHCP (Discover/Offer/Request/Ack)", OperatingSystem.IsLinux() ? CapabilityLevel.Supported : CapabilityLevel.Degraded,
-                OperatingSystem.IsLinux()
-                    ? "Full DORA with Option 55/60/43/150, bound to the adapter (SO_BINDTODEVICE)."
-                    : "Full DORA; bound to the adapter address, broadcast egress follows the Windows routing table."),
+            Feature("dhcp", "Active DHCP (DORA / INFORM)", adapter.PcapName is null ? CapabilityLevel.Degraded : CapabilityLevel.Supported,
+                "INFORM preserves an existing address; DORA tests lease acquisition on unconfigured adapters. " +
+                "Dedicated libpcap/Npcap handle avoids OS UDP/68 conflicts; capture privileges required."),
             Feature("link-adv", "Advertised vs actual speed / MDI-X", OperatingSystem.IsLinux() && HasTool("ethtool") ? CapabilityLevel.Supported : CapabilityLevel.Degraded,
                 OperatingSystem.IsLinux() ? "Parsed from ethtool link settings; flags downshift." : "NDIS reports actual speed only."),
             Feature("link-force", "Forced speed / duplex", OperatingSystem.IsLinux() && HasTool("ethtool") ? CapabilityLevel.Supported : CapabilityLevel.Unavailable,

@@ -4,11 +4,14 @@ Cross-platform Ethernet field tester for Linux and Windows. PortStrider brings L
 
 Built with **Avalonia 11** and **.NET 8**. Layer 2 work uses **SharpPcap** and **PacketDotNet**.
 
-### What's new in v1.1
+### What's new in v1.2
 
-- **WiFi spectrum analyzer** — channel-overlap graphics for 2.4 / 5 / 6 GHz, per-BSSID RSSI history, band filters, single and live scans, and nearby access-point details (Linux `iw` + Windows WLAN API)
-- **Cable diagnostics display** — visual link and port-media cards, four-pair TDR diagram with fault distances, and clear separation when TDR is not exposed by the driver
-- **Linux privilege inheritance** — child processes (`iw`, `ip`, `ethtool`, etc.) inherit network capabilities; pre-flight distinguishes saved grants that need a restart
+- **DHCP on connected adapters** — checks the server with DHCP INFORM while retaining the existing IPv4 address; unconfigured adapters still use Discover/Offer/Request/Ack. A separate capture handle avoids competing with the OS DHCP client for UDP/68.
+- **Authenticated HTTP proxies** — profile username/password fields for HTTP/TLS targets; passwords are omitted from profile exports.
+- **IPv6 address details** — link-local, unique-local, and global address reporting, including link-local-only adapters.
+- **LinkRunner G2 comparison** — [implemented features, remaining gaps, and hardware limits](docs/linkrunner-g2-comparison.md).
+
+The WiFi channel analyzer, cable diagrams, and Linux privilege improvements from v1.1 remain included.
 
 ---
 
@@ -28,7 +31,7 @@ Built with **Avalonia 11** and **.NET 8**. Layer 2 work uses **SharpPcap** and *
 
 ## Download
 
-**[GitHub Releases](https://github.com/ClaudiuJitea/PortStrider/releases)** — latest: **v1.1.0**. Pick the asset for your platform:
+**[GitHub Releases](https://github.com/ClaudiuJitea/PortStrider/releases)** — latest: **v1.2.0**. Pick the asset for your platform:
 
 | Platform | Release asset |
 | --- | --- |
@@ -53,7 +56,7 @@ On Linux, grant capture capabilities once after download (see [Linux capture pri
 
 | Area | What it does |
 | --- | --- |
-| **AutoTest** | Profile-driven test sequence (LinkRunner G2 card order): link telemetry, 802.1X, DHCP DORA with vendor options, VLAN, gateway/target reachability, DNS, advertised PoE; stop-after-any-step; continuous re-probe; auto-run on link-up |
+| **AutoTest** | Profile-driven test sequence (LinkRunner G2 card order): link telemetry, 802.1X, DHCP DORA / INFORM with vendor options, VLAN, gateway/target reachability, DNS, advertised PoE; stop-after-any-step; continuous re-probe; auto-run on link-up |
 | **Connect settings** | Applies MAC, forced speed/duplex, 802.1Q VLAN, and static IPv4 for the test, then rolls back (Linux) |
 | **802.1X** | `wpa_supplicant -D wired` — PEAP, TTLS, TLS, MD5; port stays authorized for the rest of the test |
 | **Switch** | LLDP, CDP, and EDP decode; Voice VLAN from LLDP-MED / CDP; Flash Port blinks the switch LED by cycling the link |
@@ -86,7 +89,7 @@ chmod +x scripts/grant-caps.sh
 ./scripts/grant-caps.sh
 ```
 
-This applies `cap_net_raw`, `cap_net_admin`, and `cap_net_bind_service` (UDP/68 for DHCP) to the `PortStrider` binary. Restart after granting capabilities. PortStrider prepares the first two already-granted capabilities in the launching thread's inheritable and ambient sets so child processes (`iw`, `ip`, `ethtool`, `wpa_supplicant`, `dhclient`) inherit them. Network command helpers can fall back to passwordless `sudo -n` or `pkexec`; live WiFi scans report missing privileges without repeated password prompts. Pre-flight checks active network capabilities and inheritance, and distinguishes a saved grant that still needs a restart.
+This applies `cap_net_raw`, `cap_net_admin`, and `cap_net_bind_service` (UDP/68 for DHCP) to the `PortStrider` binary. Restart after granting capabilities. PortStrider prepares the first two already-granted capabilities in the launching thread's inheritable and ambient sets so child processes (`iw`, `ip`, `ethtool`, `wpa_supplicant`) inherit them. Network command helpers can fall back to passwordless `sudo -n` or `pkexec`; live WiFi scans report missing privileges without repeated password prompts. Pre-flight checks active network capabilities and inheritance, and distinguishes a saved grant that still needs a restart.
 
 For a downloaded standalone binary, point the script at that path or run:
 
@@ -103,8 +106,22 @@ sudo setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip ./PortStrider
 
 Pre-flight checks list missing dependencies. Common ones:
 
-- **Linux:** `ip`, `ethtool`, `wpa_supplicant`, `dhclient`, `iperf3`, `ping`, `traceroute`, `iw` (WiFi scans)
+- **Linux:** `ip`, `ethtool`, `wpa_supplicant`, `iperf3`, `ping`, `traceroute`, `iw` (WiFi scans)
 - **Windows:** `iperf3` (Npcap required for capture)
+
+### DHCP with an existing address
+
+AutoTest refreshes the selected adapter before the DHCP step. If it already has a usable IPv4 address, PortStrider sends DHCP INFORM and waits for a matching server ACK. This checks the server and requests configuration options without replacing or renewing the OS lease. The result explicitly says lease acquisition was not tested. No response produces a warning, not a fabricated pass or a failed new-lease claim. Missing transport permissions produce an unavailable/skipped result.
+
+Without a usable address (including a 169.254.x.x link-local address), AutoTest performs full DORA. The raw transport sends from 0.0.0.0 and captures replies on the selected interface while OS DHCP and switch discovery continue independently. Linux can fall back to UDP/68 if available; Windows requires Npcap. A temporary VLAN interface receives only an actual DORA lease, never an INFORM result.
+
+### Authenticated proxies and IPv6
+
+[View the updated profile editor](docs/screenshots/05-profiles.png).
+
+In **Profiles**, enter an HTTP(S) proxy URL and optional username/password. AutoTest HTTP/TLS targets use these credentials when the proxy requests authentication. Passwords are stored in the local profile JSON and omitted from profile exports; re-enter them after import. The standalone Tools HTTP probe keeps its existing settings.
+
+The IPv6 AutoTest card shows the adapter's link-local address alongside its global or unique-local address. A link-local-only adapter is reported as such, with global reachability untested. ICMP probes still follow OS routing, as indicated by the probe service; this release does not implement DHCPv6 or router-advertisement analysis.
 
 ### WiFi spectrum analyzer
 
@@ -134,13 +151,14 @@ dotnet publish PortStrider.UI -c Release -r $RID \
   --self-contained true \
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:EnableCompressionInSingleFile=true \
   -o publish/${RID}-standalone
 ```
 
 Regenerate checksums:
 
 ```bash
-(cd publish && sha256sum *-standalone/PortStrider* > SHA256SUMS-supported)
+(cd publish && sha256sum linux-*-standalone/PortStrider win-*-standalone/PortStrider.exe > SHA256SUMS-supported)
 ```
 
 ---
@@ -164,7 +182,7 @@ PortStrider.sln
 | --- | --- | --- | --- |
 | AutoTest / targets | Yes | Yes | Uses host adapter routing |
 | LLDP / CDP / EDP | Yes | Yes | Needs libpcap/Npcap + privileges |
-| Active DHCP (DORA) | Yes | Degraded | Full DORA with Option 55; Linux binds to NIC (`SO_BINDTODEVICE`), Windows uses routing table |
+| Active DHCP (DORA / INFORM) | Yes | Yes | libpcap/Npcap + capture privileges; selected interface, independent of the OS DHCP socket. Linux has an interface-bound UDP fallback. |
 | Advertised speed / MDI-X / downshift | Yes | Degraded | From `ethtool`; NDIS exposes actual speed only |
 | Forced speed/duplex, user MAC, static IP | Yes | No | `ethtool -s`, `ip link`, `ip addr`; restored after test |
 | VLAN tagging test | Yes | No | Temporary 802.1Q sub-interface |

@@ -11,6 +11,7 @@ public sealed class AdapterInfo
     public string MacAddress { get; init; } = "—";
     public string? Ipv4 { get; init; }
     public string? Ipv6 { get; init; }
+    public string? Ipv6LinkLocal { get; init; }
     public string? SubnetMask { get; init; }
     public string? Gateway { get; init; }
     public IReadOnlyList<string> DnsServers { get; init; } = [];

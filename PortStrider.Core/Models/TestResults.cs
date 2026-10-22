@@ -21,6 +21,9 @@ public sealed class DhcpTestResult
     public string? Option150 { get; init; }
     public string? LeaseTime { get; init; }
     public string? DomainName { get; init; }
+    public bool InformSent { get; init; }
+    public string? ExistingIp { get; init; }
+    public bool LeaseAcquired => AckReceived && !InformSent;
     public bool RequestSent { get; init; }
     public bool AckReceived { get; init; }
     public string? InterfaceName { get; init; }

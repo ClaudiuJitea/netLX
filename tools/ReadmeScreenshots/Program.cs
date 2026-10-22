@@ -47,6 +47,14 @@ Capture(window, vm, outputDir, AppSection.Wifi, "02-wifi.png", SeedWifi);
 Capture(window, vm, outputDir, AppSection.Cable, "03-cable.png", SeedCable);
 Capture(window, vm, outputDir, AppSection.Switch, "04-switch.png", SeedSwitch);
 
+vm.SelectedNav = vm.NavItems.First(n => n.Section == AppSection.Profiles);
+Capture(window, vm, outputDir, AppSection.Profiles, "05-profiles.png", model =>
+{
+    model.Profiles.ProxyUrl = "http://proxy.example:8080";
+    model.Profiles.ProxyUsername = "technician";
+    model.Profiles.ProxyPassword = "demo-password";
+});
+
 Console.WriteLine($"Saved screenshots to {outputDir}");
 
 static MainViewModel BuildViewModel()

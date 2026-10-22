@@ -186,7 +186,7 @@ public interface IProbeService
     Task<PingSample> PingOnceAsync(string host, int timeoutMs, string? sourceAddress = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TraceHop>> TracerouteAsync(string host, IProgress<TraceHop> progress, CancellationToken cancellationToken = default);
     Task<PortProbeResult> ProbePortAsync(string host, int port, int timeoutMs, string? sourceAddress = null, CancellationToken cancellationToken = default);
-    Task<HttpProbeResult> ProbeHttpAsync(string url, string? proxyUrl = null, CancellationToken cancellationToken = default);
+    Task<HttpProbeResult> ProbeHttpAsync(string url, string? proxyUrl = null, CancellationToken cancellationToken = default, string? proxyUsername = null, string? proxyPassword = null);
     /// <summary>Sends a UDP A-record query directly to <paramref name="server"/> and times the response.</summary>
     Task<PingSample> QueryDnsAsync(string server, string name, int timeoutMs, string? sourceAddress = null, CancellationToken cancellationToken = default);
 }
