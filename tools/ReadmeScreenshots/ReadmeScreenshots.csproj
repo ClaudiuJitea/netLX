@@ -4,11 +4,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>PortStrider.Tools.ReadmeScreenshots</RootNamespace>
+    <RootNamespace>NetLX.Tools.ReadmeScreenshots</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Avalonia.Headless" Version="11.3.12" />
-    <ProjectReference Include="..\..\PortStrider.UI\PortStrider.UI.csproj" />
+    <ProjectReference Include="..\..\NetLX.UI\NetLX.UI.csproj" />
   </ItemGroup>
 </Project>

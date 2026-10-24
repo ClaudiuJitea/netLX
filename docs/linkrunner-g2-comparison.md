@@ -1,4 +1,4 @@
-# LinkRunner G2 comparison and implementation audit — PortStrider v1.3.0
+# LinkRunner G2 comparison and implementation audit — netLX v1.3.0
 
 Reviewed 22 October 2026. This audit follows the code from profiles and views through services, packet parsers, OS commands and stored results. It distinguishes implemented behavior, tested behavior, platform dependencies and missing capabilities. It does not establish certification or hardware interoperability.
 
@@ -6,13 +6,13 @@ The reference is NetAlly's [LinkRunner G2 user guide, May 29, 2019](https://www.
 
 ## Assessment
 
-PortStrider already covers much of a laptop-based Ethernet troubleshooting workflow. Its strongest areas are passive switch discovery, profile-driven connectivity checks, host capture, WiFi scan visualization and local results. Its largest software weakness was the reliability of conclusions: some operations could follow the wrong source, accept incomplete DNS answers, or continue after configuration failed. This release prioritizes those issues and adds reusable target editing and a direct DNS diagnostic tool.
+netLX already covers much of a laptop-based Ethernet troubleshooting workflow. Its strongest areas are passive switch discovery, profile-driven connectivity checks, host capture, WiFi scan visualization and local results. Its largest software weakness was the reliability of conclusions: some operations could follow the wrong source, accept incomplete DNS answers, or continue after configuration failed. This release prioritizes those issues and adds reusable target editing and a direct DNS diagnostic tool.
 
-A host NIC is not an electrical cable tester or PoE load. G2 hardware capabilities cannot be recreated by adding UI controls. PortStrider's supported link speeds, fiber modules, capture throughput and physical diagnostics depend on the host adapter and driver.
+A host NIC is not an electrical cable tester or PoE load. G2 hardware capabilities cannot be recreated by adding UI controls. netLX's supported link speeds, fiber modules, capture throughput and physical diagnostics depend on the host adapter and driver.
 
 ## Capability inventory
 
-| Area / G2 reference | PortStrider v1.3 implementation | Scope and limitations |
+| Area / G2 reference | netLX v1.3 implementation | Scope and limitations |
 | --- | --- | --- |
 | AutoTest, pp. 48–62 | `AutoTestRunner`, `AutoTestViewModel`: link, identity, wired authentication, DHCP/addressing, VLAN, IPv6, gateway, DNS and user targets; parallel switch discovery and advertised PoE. | Configurable stop point and continuous ping/TCP exist. Pending cards and parallel discovery do not exactly reproduce G2 stop-after presentation. |
 | Link settings, pp. 36–38, 53–54 | `LinkTelemetryService`, `EthtoolSettingsParser`: negotiated/local/partner speeds, duplex, MDI-X and downshift detection. | Detailed Linux telemetry requires ethtool and driver support. Windows exposes fewer details. Unknown driver values are not measurements. |
@@ -36,7 +36,7 @@ A host NIC is not an electrical cable tester or PoE load. G2 hardware capabiliti
 
 ### Additional host tools
 
-These are useful PortStrider features; their presence does not establish G2 equivalence:
+These are useful netLX features; their presence does not establish G2 equivalence:
 
 - `WifiService`, `IwScanParser`, `WindowsWifi`: Linux iw and Windows WLAN access-point scans, channel footprints, overlap graphics and RSSI history. This is not an RF spectrum analyzer. Windows channel-width/security detail is limited; OS location permission may be required.
 - `ProbeService`: traceroute with bounded arguments and cancellable child processes. Traceroute follows OS routing.

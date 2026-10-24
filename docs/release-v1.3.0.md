@@ -1,4 +1,4 @@
-# PortStrider v1.3.0
+# netLX v1.3.0
 
 This release adds direct DNS diagnostics and editable AutoTest targets, and improves the reliability of existing network tests. It retains v1.2's DHCP INFORM fix for adapters that already have an IPv4 address.
 
@@ -10,11 +10,11 @@ This release adds direct DNS diagnostics and editable AutoTest targets, and impr
 - **Temporary configuration:** preserve existing VLANs/addresses/routes, register rollback for partial changes, restore original forced link mode, validate masks and stop AutoTest if required configuration cannot be fully applied.
 - **Tools lifecycle:** Stop tests, cancellation on navigation/adapter changes, and bounded concurrent port checks. Profile exports now omit both proxy and 802.1X passwords.
 
-Read the [implementation audit and LinkRunner G2 comparison](https://github.com/ClaudiuJitea/PortStrider/blob/v1.3.0/docs/linkrunner-g2-comparison.md) for the complete feature inventory, evidence, remaining software gaps and hardware limitations.
+Read the [implementation audit and LinkRunner G2 comparison](https://github.com/ClaudiuJitea/netLX/blob/v1.3.0/docs/linkrunner-g2-comparison.md) for the complete feature inventory, evidence, remaining software gaps and hardware limitations.
 
 ## Downloads
 
-Four self-contained binaries: `PortStrider-linux-x64`, `PortStrider-linux-arm64`, `PortStrider-win-x64.exe`, `PortStrider-win-arm64.exe`. Verify with `sha256sum -c SHA256SUMS-supported` after downloading all listed assets, or check the matching entry for a single binary. Source-tree binaries are also updated under `publish/`.
+Four self-contained binaries: `netLX-linux-x64`, `netLX-linux-arm64`, `netLX-win-x64.exe`, `netLX-win-arm64.exe`. Verify with `sha256sum -c SHA256SUMS-supported` after downloading all listed assets, or check the matching entry for a single binary. Source-tree binaries are also updated under `publish/`.
 
 Linux: reapply network capabilities to the replacement binary; install iputils-ping for source-bound ICMP. Windows: Npcap is required for raw DHCP/capture. Existing temporary-interface/address/route conflicts now stop the test instead of replacing host configuration.
 

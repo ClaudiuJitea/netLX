@@ -1,0 +1,206 @@
+using NetLX.Core.Enums;
+
+namespace NetLX.Core.Models;
+
+public sealed class TestStepUpdate
+{
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    public required TestStatus Status { get; init; }
+    public required string Details { get; init; }
+    /// <summary>Host this step probed, when the step can be re-run continuously (gateway, targets).</summary>
+    public string? ContinuousHost { get; init; }
+    /// <summary>TCP port for continuous re-run; null means ICMP ping.</summary>
+    public int? ContinuousPort { get; init; }
+}
+
+public sealed class DependencyStatus
+{
+    public required string Id { get; init; }
+    public required string Name { get; init; }
+    public required bool IsReady { get; init; }
+    public required string Details { get; init; }
+    public bool CanAutoFix { get; init; }
+    public string? FixHint { get; init; }
+}
+
+public sealed record CapturedFrame
+{
+    public required long Number { get; init; }
+    public required DateTimeOffset Timestamp { get; init; }
+    public required int Length { get; init; }
+    public string SourceMac { get; init; } = "";
+    public string DestinationMac { get; init; } = "";
+    public string EtherType { get; init; } = "";
+    public string Protocol { get; init; } = "";
+    public string Summary { get; init; } = "";
+    public string Source { get; init; } = "";
+    public string Destination { get; init; } = "";
+    public byte[] Raw { get; init; } = [];
+    public string TimeLabel => Timestamp.ToLocalTime().ToString("HH:mm:ss.fff");
+}
+
+public sealed record PingSample
+{
+    public required int Sequence { get; init; }
+    public required bool Success { get; init; }
+    public long RoundtripMs { get; init; }
+    public bool SourceBound { get; init; }
+    public string Status { get; init; } = "";
+    public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.Now;
+}
+
+public sealed class PingSummary
+{
+    public int Sent { get; init; }
+    public int Received { get; init; }
+    public int Lost => Math.Max(0, Sent - Received);
+    public double LossPercent => Sent == 0 ? 0 : Lost * 100d / Sent;
+    public double MinMs { get; init; }
+    public double AvgMs { get; init; }
+    public double MaxMs { get; init; }
+}
+
+public sealed class TraceHop
+{
+    public required int Ttl { get; init; }
+    public string Address { get; init; } = "*";
+    public string Rtt { get; init; } = "*";
+    public bool TimedOut { get; init; }
+}
+
+public sealed class PortProbeResult
+{
+    public required int Port { get; init; }
+    public required string Service { get; init; }
+    public required bool Open { get; init; }
+    public required long ElapsedMs { get; init; }
+    public string? Error { get; init; }
+    public string StatusLabel => Open ? "Open" : "Closed";
+}
+
+public sealed class HttpProbeResult
+{
+    public string? FinalUrl { get; init; }
+    public string? SourceAddress { get; init; }
+    public string? CertificateError { get; init; }
+    public required string Url { get; init; }
+    public int StatusCode { get; init; }
+    public long ElapsedMs { get; init; }
+    public string? TlsProtocol { get; init; }
+    public string? CertificateSubject { get; init; }
+    public string? CertificateIssuer { get; init; }
+    public DateTimeOffset? CertificateNotAfter { get; init; }
+    public string? Error { get; init; }
+    public bool Success => Error is null && StatusCode is >= 200 and < 400;
+}
+
+public sealed class CablePairResult
+{
+    public required string Pair { get; init; }
+    public required string Status { get; init; }
+    public string? Distance { get; init; }
+    public bool IsHealthy => Status.Contains("OK", StringComparison.OrdinalIgnoreCase)
+                             || Status.Contains("normal", StringComparison.OrdinalIgnoreCase);
+    public bool IsOpen => Status.Contains("open", StringComparison.OrdinalIgnoreCase);
+    public bool IsShort => Status.Contains("short", StringComparison.OrdinalIgnoreCase);
+    public string StateLabel => IsHealthy ? "PASS" : IsOpen ? "OPEN" : IsShort ? "SHORT" : "CHECK";
+}
+
+public sealed class CablePhyInfo
+{
+    public bool? LinkDetected { get; init; }
+    public long SpeedMbps { get; init; }
+    public string SpeedLabel { get; init; } = "—";
+    public string Duplex { get; init; } = "—";
+    public string AutoNegotiation { get; init; } = "—";
+    public string MdiX { get; init; } = "—";
+    public string Port { get; init; } = "—";
+    public string LocalMaximum { get; init; } = "—";
+    public string PartnerMaximum { get; init; } = "—";
+    public bool IsDownshift { get; init; }
+    public string LinkLabel => LinkDetected switch { true => "LINK UP", false => "LINK DOWN", _ => "UNKNOWN" };
+    public string NegotiationLabel => string.Equals(AutoNegotiation, "on", StringComparison.OrdinalIgnoreCase) ? "AUTO" : AutoNegotiation.ToUpperInvariant();
+}
+
+public sealed class CableTestResult
+{
+    public bool Supported { get; init; }
+    public string Summary { get; init; } = "";
+    public IReadOnlyList<CablePairResult> Pairs { get; init; } = [];
+    public string RawOutput { get; init; } = "";
+    public CablePhyInfo Phy { get; init; } = new();
+    public bool HasPairs => Pairs.Count > 0;
+    public bool LinkUp => Phy.LinkDetected is true;
+    public string TdrLabel => Supported ? "PAIR TEST COMPLETE" : "TDR NOT EXPOSED";
+}
+
+public sealed class NeighborEntry
+{
+    public required string Address { get; init; }
+    public string? Mac { get; init; }
+    public string? InterfaceName { get; init; }
+    public string State { get; init; } = "";
+}
+
+public enum IperfProtocol { Tcp, Udp }
+
+public enum IperfDirection { Upload, Download, Bidirectional }
+
+public sealed record IperfOptions
+{
+    public required string Host { get; init; }
+    public int Port { get; init; } = 5201;
+    public int Seconds { get; init; } = 10;
+    public IperfProtocol Protocol { get; init; } = IperfProtocol.Tcp;
+    public IperfDirection Direction { get; init; } = IperfDirection.Upload;
+    public int Streams { get; init; } = 1;
+    /// <summary>UDP target rate; iperf3 defaults to 1 Mbps, which hides real loss at higher rates.</summary>
+    public int UdpBandwidthMbps { get; init; } = 100;
+}
+
+public sealed class IperfResult
+{
+    public bool Success { get; init; }
+    public string Summary { get; init; } = "";
+    public double BitsPerSecond { get; init; }
+    public double? SentBitsPerSecond { get; init; }
+    public double? ReceivedBitsPerSecond { get; init; }
+    public long? Retransmits { get; init; }
+    public double? JitterMs { get; init; }
+    public double? LostPercent { get; init; }
+    public string? Error { get; init; }
+    public string RawOutput { get; init; } = "";
+}
+
+public sealed record SessionReport
+{
+    public required Guid Id { get; init; }
+    public required DateTimeOffset StartedAt { get; init; }
+    public DateTimeOffset FinishedAt { get; init; }
+    public required string AdapterName { get; init; }
+    public string ProfileName { get; init; } = "";
+    public string JobLabel { get; init; } = "";
+    public string SiteLabel { get; init; } = "";
+    public string TechnicianNotes { get; init; } = "";
+    public string AssetSerial { get; init; } = "";
+    public string CableLabel { get; init; } = "";
+    public string WallJackLabel { get; init; } = "";
+    public string Overall { get; init; } = "";
+    public string Ipv4 { get; init; } = "";
+    public string Ipv6 { get; init; } = "";
+    public string Ipv6LinkLocal { get; init; } = "";
+    public string Gateway { get; init; } = "";
+    public SwitchInfo? Switch { get; init; }
+    public DhcpTestResult? Dhcp { get; init; }
+    public LinkTelemetry? Link { get; init; }
+    public PoeMeasurement? Poe { get; init; }
+    public DnsTestResult? Dns { get; init; }
+    public VlanTestResult? Vlan { get; init; }
+    public Dot1xResult? Dot1x { get; init; }
+    public InterfaceConfigResult? InterfaceConfig { get; init; }
+    public IReadOnlyList<TestStepUpdate> Steps { get; init; } = [];
+    public IReadOnlyList<TargetTestResult> Targets { get; init; } = [];
+    public IReadOnlyList<VlanObservation> ObservedVlans { get; init; } = [];
+    public IReadOnlyList<AttachmentInfo> Attachments { get; init; } = [];
+}

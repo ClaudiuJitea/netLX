@@ -182,10 +182,9 @@ DocProject/Help/*.hhp
 DocProject/Help/Html2
 DocProject/Help/html
 
-# Click-Once directory (release standalone builds under publish/*-standalone/ are tracked)
-publish/*
-!publish/*-standalone/
-!publish/SHA256SUMS-supported
+# Release builds (published as GitHub release assets, not committed)
+publish/
+dist/
 
 # Publish Web Output
 *.[Pp]ublish.xml
