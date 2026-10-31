@@ -17,7 +17,8 @@ if [[ ! -f "$SRC" ]]; then
 fi
 
 install -Dm755 "$SRC" "$PREFIX/bin/netLX"
-install -Dm644 "$ASSETS/netlx.png" "$PREFIX/share/icons/hicolor/256x256/apps/netlx.png"
+install -Dm644 "$ASSETS/netlx.png" "$PREFIX/share/icons/hicolor/512x512/apps/netlx.png"
+rm -f "$PREFIX/share/icons/hicolor/256x256/apps/netlx.png"  # older installs put the icon here
 mkdir -p "$PREFIX/share/applications"
 sed "s|^Exec=.*|Exec=$PREFIX/bin/netLX|" "$ASSETS/netlx.desktop" > "$PREFIX/share/applications/netlx.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$PREFIX/share/applications" || true
